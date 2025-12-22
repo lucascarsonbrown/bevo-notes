@@ -1,0 +1,32 @@
+{
+    "manifest_version": 3,
+    "name": "Bevo Notes",
+    "version": "1.0.0",
+    "description": "Grab captions from UT Lectures Online and turn them into AI-organized notes.",
+    "action": {
+      "default_popup": "popup.html",
+      "default_icon": {
+        "16": "icons/icon1.png",
+        "48": "icons/icon1.png",
+        "128": "icons/icon1.png"
+      }
+    },
+    "permissions": [
+      "activeTab",
+      "scripting",
+      "storage",
+      "tabs"
+    ],
+    "host_permissions": [
+      "https://lecturecapture.la.utexas.edu/*",
+      "https://lectures-engage.la.utexas.edu/*",
+      "https://api.openai.com/*"
+    ],
+    "content_scripts": [
+      {
+        "matches": ["https://lecturecapture.la.utexas.edu/*"],
+        "js": ["content.js"],
+        "run_at": "document_idle"
+      }
+    ]
+  }
