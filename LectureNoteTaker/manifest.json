@@ -20,7 +20,7 @@
     "host_permissions": [
       "https://lecturecapture.la.utexas.edu/*",
       "https://lectures-engage.la.utexas.edu/*",
-      "https://api.openai.com/*"
+      "https://generativelanguage.googleapis.com/*"
     ],
     "content_scripts": [
       {
