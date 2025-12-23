@@ -5,16 +5,35 @@ import TopNav from '@/components/TopNav';
 import Sidebar from '@/components/Sidebar';
 import NotesGrid from '@/components/NotesGrid';
 import UsageBanner from '@/components/UsageBanner';
+import CreateFolderModal from '@/components/CreateFolderModal';
+import MoveFolderModal from '@/components/MoveFolderModal';
+import DeleteConfirmationModal from '@/components/DeleteConfirmationModal';
 
-// Mock data for development
-const mockFolders = [
+interface Note {
+  id: string;
+  title: string;
+  date: string;
+  folderId?: string;
+  preview: string;
+}
+
+interface Folder {
+  id: string;
+  name: string;
+  icon: string;
+  color: string;
+  count: number;
+}
+
+// Initial mock data for development
+const initialFolders: Folder[] = [
   { id: '1', name: 'CS 331', icon: '📘', color: '#bf5700', count: 5 },
   { id: '2', name: 'Chemistry 101', icon: '🧪', color: '#10b981', count: 3 },
   { id: '3', name: 'Calculus II', icon: '📐', color: '#3b82f6', count: 8 },
   { id: '4', name: 'Statistics', icon: '📊', color: '#8b5cf6', count: 2 },
 ];
 
-const mockNotes = [
+const initialNotes: Note[] = [
   {
     id: '1',
     title: 'Recursion and Recurrence Relations',
@@ -63,15 +82,78 @@ export default function DashboardPage() {
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isDark, setIsDark] = useState(false);
+  const [folders, setFolders] = useState<Folder[]>(initialFolders);
+  const [notes, setNotes] = useState<Note[]>(initialNotes);
+
+  // Modal states
+  const [isCreateFolderModalOpen, setIsCreateFolderModalOpen] = useState(false);
+  const [isMoveModalOpen, setIsMoveModalOpen] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [noteToMove, setNoteToMove] = useState<Note | null>(null);
+  const [noteToDelete, setNoteToDelete] = useState<{ id: string; title: string } | null>(null);
+
+  // Calculate folder counts
+  const foldersWithCounts = folders.map((folder) => ({
+    ...folder,
+    count: notes.filter((note) => note.folderId === folder.id).length
+  }));
+
+  const unorganizedCount = notes.filter((note) => !note.folderId).length;
 
   // Filter notes based on selected folder and search
-  const filteredNotes = mockNotes.filter((note) => {
-    const matchesFolder = !selectedFolder || selectedFolder === 'all' || note.folderId === selectedFolder;
-    const matchesSearch = !searchQuery ||
+  const filteredNotes = notes.filter((note) => {
+    const matchesFolder =
+      !selectedFolder ||
+      selectedFolder === 'all' ||
+      (selectedFolder === 'unorganized' && !note.folderId) ||
+      note.folderId === selectedFolder;
+    const matchesSearch =
+      !searchQuery ||
       note.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       note.preview.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesFolder && matchesSearch;
   });
+
+  // Folder CRUD operations
+  const handleCreateFolder = (name: string, icon: string, color: string) => {
+    const newFolder: Folder = {
+      id: Date.now().toString(),
+      name,
+      icon,
+      color,
+      count: 0
+    };
+    setFolders([...folders, newFolder]);
+  };
+
+  const handleDeleteFolder = (folderId: string) => {
+    // Move notes from deleted folder to unorganized
+    setNotes(notes.map((note) => (note.folderId === folderId ? { ...note, folderId: undefined } : note)));
+    setFolders(folders.filter((f) => f.id !== folderId));
+    if (selectedFolder === folderId) {
+      setSelectedFolder(null);
+    }
+  };
+
+  // Note operations
+  const handleMoveNote = (noteId: string, folderId: string | undefined) => {
+    setNotes(notes.map((note) => (note.id === noteId ? { ...note, folderId } : note)));
+  };
+
+  const handleDeleteNote = (noteId: string) => {
+    const note = notes.find((n) => n.id === noteId);
+    if (note) {
+      setNoteToDelete({ id: note.id, title: note.title });
+      setIsDeleteModalOpen(true);
+    }
+  };
+
+  const confirmDeleteNote = () => {
+    if (noteToDelete) {
+      setNotes(notes.filter((n) => n.id !== noteToDelete.id));
+      setNoteToDelete(null);
+    }
+  };
 
   return (
     <div className={isDark ? 'dark' : ''}>
@@ -87,10 +169,11 @@ export default function DashboardPage() {
         <div className="flex pt-16">
           {/* Sidebar */}
           <Sidebar
-            folders={mockFolders}
+            folders={foldersWithCounts}
             selectedFolder={selectedFolder}
             onSelectFolder={setSelectedFolder}
-            unorganizedCount={0}
+            unorganizedCount={unorganizedCount}
+            onCreateFolder={() => setIsCreateFolderModalOpen(true)}
           />
 
           {/* Main Content */}
@@ -105,10 +188,44 @@ export default function DashboardPage() {
             {/* Notes Grid */}
             <NotesGrid
               notes={filteredNotes}
-              folders={mockFolders}
+              folders={foldersWithCounts}
+              onDeleteNote={handleDeleteNote}
+              onMoveNote={(note) => {
+                setNoteToMove(note);
+                setIsMoveModalOpen(true);
+              }}
             />
           </main>
         </div>
+
+        {/* Modals */}
+        <CreateFolderModal
+          isOpen={isCreateFolderModalOpen}
+          onClose={() => setIsCreateFolderModalOpen(false)}
+          onCreateFolder={handleCreateFolder}
+        />
+
+        <MoveFolderModal
+          isOpen={isMoveModalOpen}
+          onClose={() => {
+            setIsMoveModalOpen(false);
+            setNoteToMove(null);
+          }}
+          note={noteToMove}
+          folders={foldersWithCounts}
+          onMoveNote={handleMoveNote}
+        />
+
+        <DeleteConfirmationModal
+          isOpen={isDeleteModalOpen}
+          onClose={() => {
+            setIsDeleteModalOpen(false);
+            setNoteToDelete(null);
+          }}
+          onConfirm={confirmDeleteNote}
+          itemType="note"
+          itemName={noteToDelete?.title || ''}
+        />
       </div>
     </div>
   );

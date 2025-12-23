@@ -13,9 +13,10 @@ interface SidebarProps {
   selectedFolder: string | null;
   onSelectFolder: (folderId: string | null) => void;
   unorganizedCount: number;
+  onCreateFolder: () => void;
 }
 
-export default function Sidebar({ folders, selectedFolder, onSelectFolder, unorganizedCount }: SidebarProps) {
+export default function Sidebar({ folders, selectedFolder, onSelectFolder, unorganizedCount, onCreateFolder }: SidebarProps) {
   const totalCount = folders.reduce((sum, folder) => sum + folder.count, 0) + unorganizedCount;
 
   return (
@@ -121,6 +122,7 @@ export default function Sidebar({ folders, selectedFolder, onSelectFolder, unorg
 
         {/* New Folder Button */}
         <button
+          onClick={onCreateFolder}
           className="w-full h-10 px-4 flex items-center gap-3 rounded-lg transition-all text-left"
           style={{ color: 'var(--accent-primary)' }}
           onMouseEnter={(e) => {

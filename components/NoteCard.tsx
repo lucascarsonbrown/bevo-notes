@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import ExportDropdown from './ExportDropdown';
 
 interface Note {
   id: string;
@@ -21,9 +23,12 @@ interface Folder {
 interface NoteCardProps {
   note: Note;
   folder?: Folder;
+  onDelete: (noteId: string) => void;
+  onMove: (note: Note) => void;
 }
 
-export default function NoteCard({ note, folder }: NoteCardProps) {
+export default function NoteCard({ note, folder, onDelete, onMove }: NoteCardProps) {
+  const router = useRouter();
   const [isHovered, setIsHovered] = useState(false);
 
   const formattedDate = new Date(note.date).toLocaleDateString('en-US', {
@@ -34,7 +39,7 @@ export default function NoteCard({ note, folder }: NoteCardProps) {
 
   return (
     <div
-      className="rounded-xl border transition-all cursor-pointer"
+      className="rounded-xl border transition-all"
       style={{
         backgroundColor: 'var(--bg-secondary)',
         borderColor: isHovered ? 'var(--accent-primary)' : 'var(--border-color)',
@@ -97,17 +102,28 @@ export default function NoteCard({ note, folder }: NoteCardProps) {
         }}
       >
         {/* Export Dropdown */}
+        <ExportDropdown note={note} />
+
+        {/* Move to Folder */}
         <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onMove(note);
+          }}
           className="text-sm font-medium flex items-center gap-1.5 transition-colors"
           style={{ color: 'var(--text-secondary)' }}
           onMouseEnter={(e) => e.currentTarget.style.color = 'var(--accent-primary)'}
           onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}
         >
-          📤 Export ▼
+          📁
         </button>
 
         {/* Delete */}
         <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(note.id);
+          }}
           className="w-8 h-8 rounded flex items-center justify-center transition-all"
           style={{ color: 'var(--text-secondary)' }}
           onMouseEnter={(e) => {
@@ -124,6 +140,10 @@ export default function NoteCard({ note, folder }: NoteCardProps) {
 
         {/* Open Button */}
         <button
+          onClick={(e) => {
+            e.stopPropagation();
+            router.push(`/notes/${note.id}`);
+          }}
           className="px-4 py-1.5 rounded-md text-sm font-medium text-white transition-all"
           style={{
             backgroundColor: 'var(--accent-primary)'

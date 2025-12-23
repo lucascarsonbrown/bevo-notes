@@ -21,9 +21,11 @@ interface Folder {
 interface NotesGridProps {
   notes: Note[];
   folders: Folder[];
+  onDeleteNote: (noteId: string) => void;
+  onMoveNote: (note: Note) => void;
 }
 
-export default function NotesGrid({ notes, folders }: NotesGridProps) {
+export default function NotesGrid({ notes, folders, onDeleteNote, onMoveNote }: NotesGridProps) {
   if (notes.length === 0) {
     return (
       <div className="p-8">
@@ -66,6 +68,8 @@ export default function NotesGrid({ notes, folders }: NotesGridProps) {
               key={note.id}
               note={note}
               folder={folder}
+              onDelete={onDeleteNote}
+              onMove={onMoveNote}
             />
           );
         })}
