@@ -1,7 +1,8 @@
 # Bevo Notes - MVP Design Document
 
-**Project:** Full-stack subscription-based AI lecture notes platform for UT Austin students
+**Project:** Full-stack AI lecture notes platform for UT Austin students (User-Provided API Keys)
 **Created:** 2025-12-22
+**Last Updated:** 2026-01-06
 **Status:** Design Phase
 
 ---
@@ -14,8 +15,8 @@ Bevo Notes transforms UT Austin lecture recordings into searchable, organized AI
 - **Chrome Extension:** Standalone note generation (existing functionality) + optional cloud sync for authenticated users
 - **Web Dashboard:** Full-featured notes library with folders, search, and export capabilities
 - **Authentication:** Magic link email authentication (@utexas.edu only) via Supabase
-- **Billing:** Stripe subscriptions at $4.99/month with 3 free trial note generations
-- **AI Processing:** Server-side Google Gemini 2.0 Flash (migration from client-side OpenAI)
+- **API Key Model:** Users provide their own Google Gemini API key, stored securely in database
+- **AI Processing:** User's Google Gemini 2.0 Flash API key for note generation (client-side or server-side)
 
 ---
 
@@ -29,6 +30,7 @@ Bevo Notes transforms UT Austin lecture recordings into searchable, organized AI
 │  (Standalone Mode)  │
 │  - Extract VTT      │
 │  - Generate Notes   │
+│  - User's Gemini Key│
 │  - Local Storage    │
 └──────────┬──────────┘
            │
@@ -38,8 +40,8 @@ Bevo Notes transforms UT Austin lecture recordings into searchable, organized AI
 ┌─────────────────────┐
 │   Next.js Backend   │
 │  - Session Check    │
-│  - Usage Tracking   │
-│  - Gemini API       │
+│  - User Gemini Key  │
+│  - Note Generation  │
 │  - Note Storage     │
 └──────────┬──────────┘
            │
@@ -49,14 +51,7 @@ Bevo Notes transforms UT Austin lecture recordings into searchable, organized AI
 │  - Auth (Magic Link)│
 │  - PostgreSQL       │
 │  - Row-Level Security│
-└─────────────────────┘
-           │
-           ▼
-┌─────────────────────┐
-│   Stripe Billing    │
-│  - Subscriptions    │
-│  - Webhooks         │
-│  - Customer Portal  │
+│  - Encrypted API Keys│
 └─────────────────────┘
 ```
 
@@ -68,57 +63,60 @@ Bevo Notes transforms UT Austin lecture recordings into searchable, organized AI
 
 1. **Install Extension**
    - User installs Chrome extension from store
-   - Extension works immediately (no login required)
-   - User can generate 3 free notes using local OpenAI processing
+   - Extension prompts: "Enter your Google Gemini API key to get started"
+   - User clicks "Get API Key" → Opens Google AI Studio in new tab
+   - User signs up for Google AI Studio, creates free API key
+   - User copies API key, pastes into extension
+   - Extension stores API key in chrome.storage.local
+   - Extension is now ready to generate notes locally
 
 2. **First Note Generation** (Standalone)
    - Navigate to lecturecapture.la.utexas.edu lecture
    - Enable captions (CC button)
    - Click "Generate AI Notes" in extension
    - Extension extracts VTT transcript
-   - Extension calls OpenAI GPT-4o-mini client-side
-   - Notes stored in chrome.storage.local
+   - Extension calls Google Gemini 2.0 Flash using user's API key (client-side)
+   - Notes generated and stored in chrome.storage.local
    - Notes displayed in extension popup + full page
 
 3. **Discover Cloud Features**
-   - After 3 free notes, extension prompts: "Upgrade to save your notes forever"
+   - Extension shows banner: "Want to save your notes forever? Sign up for free cloud sync"
    - User clicks "Sign Up" button in extension
    - Opens extension login popup
 
-4. **Authentication**
+4. **Authentication & API Key Sync**
    - Extension shows login form (email only)
    - User enters @utexas.edu email
    - Supabase sends magic link to email
    - User clicks link, completes authentication
+   - User is redirected to web dashboard
+   - Dashboard shows: "Set up your API key to sync notes"
+   - User enters their Google Gemini API key (or re-uses existing one from extension)
+   - API key is encrypted and stored in Supabase database
    - Extension receives session token, stores in chrome.storage.local
    - Extension now auto-syncs all future notes to backend
 
-5. **Subscription**
-   - After login, user is redirected to web dashboard
-   - Dashboard shows subscription prompt: "Subscribe for $4.99/month"
-   - User clicks "Subscribe" → Stripe Checkout
-   - Completes payment with card
-   - Stripe webhook updates subscription status in Supabase
-   - User can now generate unlimited notes (backend-processed)
-
-6. **Ongoing Usage**
+5. **Ongoing Usage**
    - User generates note on lecture page
    - Extension checks: "Is user logged in?"
-     - **No:** Generate locally (count toward free trial if under 3)
+     - **No:** Generate locally using user's API key stored in extension
      - **Yes:** Send to backend
-       - Backend checks subscription status
-       - If active: Process with Gemini 2.0 Flash, save to database
-       - If inactive: Return error "Subscription required"
+       - Backend retrieves user's encrypted API key from database
+       - Backend calls Gemini 2.0 Flash using user's API key
+       - Backend saves note to database
+       - Backend returns note to extension
    - Notes appear in extension + web dashboard
    - User organizes notes into folders on dashboard
+   - User pays for their own Gemini API usage (free tier: 1500 requests/day, 1M tokens/min)
 
 ### 2. Returning User Journey
 
 1. Open lecturecapture.la.utexas.edu
 2. Click extension → "Generate AI Notes"
 3. Extension auto-syncs to backend (user already authenticated)
-4. Note appears in dashboard within seconds
-5. User logs into dashboard anytime to browse/search/organize/export
+4. Backend uses user's stored API key for generation
+5. Note appears in dashboard within seconds
+6. User logs into dashboard anytime to browse/search/organize/export
 
 ---
 
@@ -132,12 +130,9 @@ users (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   email TEXT UNIQUE NOT NULL,
   created_at TIMESTAMP DEFAULT NOW(),
-  stripe_customer_id TEXT UNIQUE,
-  subscription_status TEXT DEFAULT 'none', -- none, trialing, active, past_due, canceled
-  subscription_id TEXT,
-  trial_notes_used INTEGER DEFAULT 0,
-  trial_notes_limit INTEGER DEFAULT 3,
-  current_period_end TIMESTAMP
+  gemini_api_key_encrypted TEXT, -- Encrypted Google Gemini API key
+  api_key_last_verified TIMESTAMP, -- Last successful API call timestamp
+  api_key_is_valid BOOLEAN DEFAULT TRUE -- Tracks if key is working
 )
 ```
 
@@ -207,18 +202,39 @@ CREATE POLICY folders_own_data ON folders
 - **GET /api/auth/callback** - Supabase auth callback
 - **POST /api/auth/logout** - Sign out user
 
+#### API Key Management
+- **POST /api/user/api-key** - Save or update user's Gemini API key
+  - Body: `{ api_key: string }`
+  - Auth: Required (Supabase session)
+  - Processing:
+    1. Validate API key by making test call to Gemini API
+    2. If valid: Encrypt API key using AES-256
+    3. Store encrypted key in database
+    4. Return success status
+  - Security: API key never stored in plaintext
+
+- **GET /api/user/api-key/status** - Check if user has valid API key
+  - Auth: Required (Supabase session)
+  - Returns: `{ has_key: boolean, is_valid: boolean, last_verified: timestamp }`
+
+- **DELETE /api/user/api-key** - Remove user's API key
+  - Auth: Required (Supabase session)
+  - Processing: Delete encrypted key from database
+
 #### Notes
 - **POST /api/notes/generate** - Generate new note from transcript
   - Body: `{ title, date, transcript }`
   - Auth: Required (Supabase session)
-  - Checks: Subscription status, usage limits
+  - Checks: User has valid API key stored
   - Processing:
     1. Hash transcript (SHA-256)
     2. Check cache (existing note with same hash)
     3. If cached: Return existing note
-    4. If new: Clean transcript, call Gemini 2.0 Flash
-    5. Store JSON + HTML in database
-    6. Return note ID + HTML
+    4. If new: Clean transcript, retrieve user's encrypted API key
+    5. Decrypt API key
+    6. Call Gemini 2.0 Flash using user's API key
+    7. Store JSON + HTML in database
+    8. Return note ID + HTML
   - Rate limit: 10 requests/minute per user
 
 - **GET /api/notes** - List all notes for authenticated user
@@ -248,46 +264,43 @@ CREATE POLICY folders_own_data ON folders
   - Body: `{ note_ids: [], format: 'pdf' | 'markdown' | 'html' }`
   - Returns: ZIP file
 
-#### Subscriptions
-- **GET /api/subscription/status** - Get current subscription info
-- **POST /api/subscription/checkout** - Create Stripe Checkout session
-- **POST /api/subscription/portal** - Create Customer Portal session
-- **POST /api/webhooks/stripe** - Stripe webhook handler
-  - Events:
-    - `checkout.session.completed` → Create subscription
-    - `customer.subscription.created` → Set status to 'active'
-    - `customer.subscription.updated` → Update status
-    - `customer.subscription.deleted` → Set status to 'canceled'
-    - `invoice.payment_succeeded` → Update current_period_end
-    - `invoice.payment_failed` → Set status to 'past_due'
-
 ---
 
 ### Chrome Extension Updates
 
-#### New Authentication Flow
+#### API Key Setup Flow
+1. On first install, show API key setup UI (`setup.html`, `setup.js`)
+2. Provide "Get API Key" button → Opens `https://aistudio.google.com/app/apikey`
+3. User pastes API key into input field
+4. Extension validates key by making test call to Gemini API
+5. Store API key in `chrome.storage.local` (encrypted in extension storage)
+6. Show success message and enable note generation
+
+#### Authentication Flow (for Cloud Sync)
 1. Add login popup UI (`login.html`, `login.js`)
 2. Use Supabase Auth Helpers for Chrome Extensions
 3. Store session token in `chrome.storage.local`
-4. Check session validity on each note generation
+4. On first login, prompt user to enter API key on dashboard
+5. Check session validity on each note generation
 
 #### Auto-Sync Logic (`popup.js` updates)
 ```javascript
 async function generateNotes() {
+  const apiKey = await getApiKey(); // Check chrome.storage.local
+
+  if (!apiKey) {
+    showApiKeySetup();
+    return;
+  }
+
   const session = await getSession(); // Check chrome.storage.local
 
   if (session && session.expires_at > Date.now()) {
-    // User is authenticated - send to backend
+    // User is authenticated - send to backend (backend will use stored API key)
     await syncToBackend(transcript, session.access_token);
   } else {
-    // User not authenticated - generate locally
-    const trialCount = await getTrialCount();
-    if (trialCount >= 3) {
-      showUpgradePrompt();
-      return;
-    }
-    await generateLocally(transcript);
-    await incrementTrialCount();
+    // User not authenticated - generate locally using their API key
+    await generateLocally(transcript, apiKey);
   }
 }
 
@@ -311,16 +324,36 @@ async function syncToBackend(transcript, token) {
     // Display notes from backend
     displayNotes(data.notes_html);
   } else {
-    // Handle errors (subscription expired, etc.)
-    showError(data.message);
+    // Handle errors (invalid API key, etc.)
+    if (data.error === 'invalid_api_key') {
+      showApiKeyError();
+    } else {
+      showError(data.message);
+    }
   }
+}
+
+async function generateLocally(transcript, apiKey) {
+  // Call Gemini API directly using user's API key
+  const { GoogleGenerativeAI } = await import('@google/generative-ai');
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+
+  // Generate notes and store locally
+  const result = await model.generateContent(prompt);
+  const notes = result.response.text();
+
+  // Store in chrome.storage.local
+  await saveNotesLocally(notes);
+  displayNotes(notes);
 }
 ```
 
-#### Trial Tracking
-- Store trial count in backend (authoritative source)
-- Extension calls `GET /api/notes/trial-status` before local generation
-- Backend returns `{ trial_notes_used: 2, trial_notes_limit: 3 }`
+#### API Key Management
+- Store API key securely in extension storage
+- Provide "Update API Key" button in extension settings
+- If API key fails, show error and prompt to update
+- Sync API key to backend when user authenticates (stored encrypted in database)
 
 ---
 
@@ -394,93 +427,85 @@ You are an expert academic note-taker. Convert this lecture transcript into stru
    - Apply consistent styling
    - Store both JSON (for future re-rendering) and HTML (for display)
 
-**Cost Controls:**
-- Cache by transcript hash (avoid regenerating identical lectures)
-- Hard limit: 50,000 characters per transcript
-- Rate limit: 10 notes/minute per user
-- Monthly usage cap: 100 notes/user (configurable)
-- Gemini quota monitoring with alerts
+**Cost Controls (User's Responsibility):**
+- Cache by transcript hash (avoid regenerating identical lectures for user)
+- Hard limit: 50,000 characters per transcript (protect user's quota)
+- Rate limit: 10 notes/minute per user (prevent abuse of user's key)
+- User pays for their own Gemini API usage
+- Gemini Free Tier: 1,500 requests/day, 1M tokens/minute (typically sufficient for students)
+- If user exceeds free tier, they pay Google directly for overage
 
 ---
 
-### Stripe Integration
+### API Key Security & Encryption
 
-#### Products & Prices
+#### Encryption Implementation
+
+**Algorithm:** AES-256-GCM (Galois/Counter Mode)
+**Key Derivation:** Environment variable `ENCRYPTION_KEY` (32-byte random key)
+
 ```javascript
-// Create in Stripe Dashboard
-Product: "Bevo Notes Pro"
-Price: $4.99/month (recurring)
-Price ID: price_xxxxx
-```
+// Server-side encryption (Next.js API route)
+import crypto from 'crypto';
 
-#### Checkout Flow
-1. User clicks "Subscribe" on dashboard
-2. Frontend calls `POST /api/subscription/checkout`
-3. Backend creates Stripe Checkout Session:
-   ```javascript
-   const session = await stripe.checkout.sessions.create({
-     customer_email: user.email,
-     mode: 'subscription',
-     payment_method_types: ['card'],
-     line_items: [{
-       price: 'price_xxxxx',
-       quantity: 1,
-     }],
-     success_url: 'https://bevo-notes.vercel.app/dashboard?success=true',
-     cancel_url: 'https://bevo-notes.vercel.app/subscribe?canceled=true',
-     metadata: {
-       user_id: user.id
-     }
-   });
-   ```
-4. User completes payment on Stripe Checkout page
-5. Redirected to success URL
-6. Webhook updates database
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY; // 32-byte hex string
+const IV_LENGTH = 16; // AES block size
 
-#### Webhook Handler (`/api/webhooks/stripe`)
-```javascript
-// Verify webhook signature
-const sig = request.headers['stripe-signature'];
-const event = stripe.webhooks.constructEvent(body, sig, webhookSecret);
+function encryptApiKey(apiKey: string): string {
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(ENCRYPTION_KEY, 'hex'), iv);
 
-switch (event.type) {
-  case 'checkout.session.completed':
-    const session = event.data.object;
-    // Update user with customer_id and subscription_id
-    await supabase
-      .from('users')
-      .update({
-        stripe_customer_id: session.customer,
-        subscription_id: session.subscription,
-        subscription_status: 'active'
-      })
-      .eq('id', session.metadata.user_id);
-    break;
+  let encrypted = cipher.update(apiKey, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
 
-  case 'customer.subscription.updated':
-    const subscription = event.data.object;
-    await supabase
-      .from('users')
-      .update({
-        subscription_status: subscription.status,
-        current_period_end: new Date(subscription.current_period_end * 1000)
-      })
-      .eq('subscription_id', subscription.id);
-    break;
+  const authTag = cipher.getAuthTag();
 
-  case 'customer.subscription.deleted':
-    await supabase
-      .from('users')
-      .update({ subscription_status: 'canceled' })
-      .eq('subscription_id', event.data.object.id);
-    break;
+  // Return IV + authTag + encrypted data (all in hex)
+  return iv.toString('hex') + ':' + authTag.toString('hex') + ':' + encrypted;
+}
+
+function decryptApiKey(encryptedData: string): string {
+  const parts = encryptedData.split(':');
+  const iv = Buffer.from(parts[0], 'hex');
+  const authTag = Buffer.from(parts[1], 'hex');
+  const encrypted = parts[2];
+
+  const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(ENCRYPTION_KEY, 'hex'), iv);
+  decipher.setAuthTag(authTag);
+
+  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+
+  return decrypted;
 }
 ```
 
-#### Customer Portal
-- Managed by Stripe (no custom code needed)
-- Users can cancel, update payment method, view invoices
-- Access via `POST /api/subscription/portal` → redirect to Stripe portal
+#### API Key Validation
+
+```javascript
+// Validate user's API key before storing
+async function validateGeminiApiKey(apiKey: string): Promise<boolean> {
+  try {
+    const { GoogleGenerativeAI } = await import('@google/generative-ai');
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+
+    // Make a minimal test call
+    const result = await model.generateContent('Test');
+    return result.response.text().length > 0;
+  } catch (error) {
+    return false; // Invalid key
+  }
+}
+```
+
+#### Security Best Practices
+
+1. **Never Log API Keys:** Ensure API keys are never logged in console, error messages, or analytics
+2. **Environment Variables:** Store encryption key in secure environment variables (never in code)
+3. **HTTPS Only:** All API key transmission must use HTTPS
+4. **Rate Limiting:** Prevent brute-force attacks on API key validation endpoint
+5. **Audit Logging:** Log when API keys are added, updated, or fail validation (but not the keys themselves)
 
 ---
 
@@ -619,19 +644,20 @@ export async function requireAuth(request) {
   return user;
 }
 
-// Middleware for subscription check
-export async function requireSubscription(user) {
+// Middleware for API key check
+export async function requireApiKey(user) {
   const { data: userData } = await supabase
     .from('users')
-    .select('subscription_status, trial_notes_used, trial_notes_limit')
+    .select('gemini_api_key_encrypted, api_key_is_valid')
     .eq('id', user.id)
     .single();
 
-  const hasActiveSubscription = ['active', 'trialing'].includes(userData.subscription_status);
-  const hasTrialRemaining = userData.trial_notes_used < userData.trial_notes_limit;
+  if (!userData.gemini_api_key_encrypted) {
+    return new Response('API key required. Please set up your Gemini API key in settings.', { status: 402 });
+  }
 
-  if (!hasActiveSubscription && !hasTrialRemaining) {
-    return new Response('Subscription required', { status: 402 });
+  if (!userData.api_key_is_valid) {
+    return new Response('Your API key is invalid. Please update it in settings.', { status: 402 });
   }
 
   return userData;
@@ -642,23 +668,19 @@ export async function requireSubscription(user) {
 
 ## Security Considerations
 
-### 1. API Key Management
-- **Current Issue:** OpenAI API key hardcoded in extension `popup.js`
-- **Solution:** Remove API key from extension entirely
-- **New Flow:** All AI calls happen server-side via backend API
+### 1. User API Key Storage & Encryption
+- **Storage:** User's Gemini API keys are encrypted using AES-256-GCM before storing in database
+- **Encryption Key:** Stored in environment variable `ENCRYPTION_KEY`, never in code or version control
+- **Decryption:** Only happens server-side when making API calls on behalf of user
+- **Never Client-Side:** Encrypted keys are never sent to client (extension or browser)
+- **Validation:** All API keys are validated before storage with test Gemini API call
+- **Key Rotation:** Users can update/delete their API keys anytime via settings
 
-### 2. Stripe Webhook Verification
-```javascript
-// CRITICAL: Verify webhook signatures
-const sig = request.headers['stripe-signature'];
-let event;
-
-try {
-  event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
-} catch (err) {
-  return new Response('Webhook signature verification failed', { status: 400 });
-}
-```
+### 2. API Key Transmission Security
+- **HTTPS Only:** All API key submissions must use HTTPS
+- **No Logging:** API keys are never logged in console, error messages, analytics, or monitoring tools
+- **Input Sanitization:** API keys are validated to match expected format before processing
+- **Rate Limiting:** API key validation endpoint is rate-limited to prevent brute-force attacks
 
 ### 3. Row-Level Security (RLS)
 - All database tables use RLS policies
@@ -666,14 +688,16 @@ try {
 - Even if API is compromised, users can't access others' notes
 
 ### 4. Rate Limiting
-- Extension: 10 note generations per minute
-- Search API: 60 requests per minute
+- API Key Management: 5 validation attempts per hour per user (prevent abuse)
+- Note Generation: 10 requests per minute per user (protect user's Gemini quota)
+- Search API: 60 requests per minute per user
 - Implement using Upstash Redis or Vercel KV
 
 ### 5. Input Validation
-- Sanitize all user inputs (lecture titles, folder names)
+- Sanitize all user inputs (lecture titles, folder names, API keys)
 - Validate transcript length (max 50,000 chars)
 - Prevent XSS in rendered notes (use DOMPurify)
+- Validate API key format before encryption
 
 ### 6. CORS Configuration
 ```javascript
@@ -693,25 +717,36 @@ export const config = {
 
 ## Cost Analysis
 
-### Per-User Monthly Costs
+### Platform Costs (User-Provided API Keys Model)
 
 **AI Processing (Gemini 2.0 Flash):**
-- Average lecture: 10,000 tokens input, 2,000 tokens output
-- Cost per note: ~$0.001 (input) + ~$0.0006 (output) = **$0.0016**
-- Assumed usage: 20 notes/month
-- **AI cost/user/month: $0.032**
+- **Platform Cost:** $0 (users provide their own API keys)
+- **User Cost:** Google Gemini Free Tier
+  - 1,500 requests per day
+  - 1M tokens per minute
+  - For typical student: ~20 notes/month = well within free tier
+  - If user exceeds: They pay Google directly (~$0.032/month for 20 notes)
 
 **Infrastructure:**
-- Vercel: Free tier (10M serverless function executions)
-- Supabase: Free tier (500MB database, 2GB file storage, unlimited API requests)
-- Stripe: 2.9% + $0.30 per transaction = **$0.44/month** (on $4.99 subscription)
+- **Vercel:** Free tier (10M serverless function executions, sufficient for MVP)
+- **Supabase:** Free tier (500MB database, 2GB file storage, unlimited API requests)
+- **Domain:** ~$12/year (~$1/month) - Optional, can use .vercel.app
+- **Monitoring/Analytics:** Free tier (PostHog, Sentry)
 
-**Total Cost Per Paying User:** ~$0.50/month
-**Revenue Per User:** $4.99/month
-**Gross Margin:** ~90% ($4.49 profit per user)
+**Total Monthly Platform Cost:** ~$1/month (domain only)
+**Cost Per User:** $0 (infrastructure scales on free tiers)
+**Revenue Model:** Free platform (no subscription fees)
 
-**Break-even:** ~10 paying users to cover fixed costs
-**Target:** 100 users in first semester = $449/month profit
+**Monetization Strategy (Post-MVP):**
+- Completely free for students during MVP
+- Future options if scaling beyond free tiers:
+  - Optional premium features (advanced analytics, integrations)
+  - Institutional licensing to universities
+  - Donations/sponsorships
+  - Ads (not recommended for student tool)
+
+**Break-even:** Already profitable at $0 monthly cost
+**Target:** 100+ active users with $0 operating costs
 
 ---
 
@@ -784,20 +819,21 @@ export const config = {
 ---
 
 ### Phase 3: Extension Sync (Week 3-4)
+- [ ] Extension API key setup UI (first-time setup flow)
 - [ ] Extension login popup UI
 - [ ] Supabase Auth in extension (chrome.storage.local)
 - [ ] Session token refresh logic
 - [ ] Backend API: `POST /api/notes/generate`
-- [ ] Gemini 2.0 Flash integration
+- [ ] Gemini 2.0 Flash integration using user's API key
+- [ ] API key retrieval and decryption in backend
 - [ ] Transcript cleaning & validation
 - [ ] JSON schema validation
 - [ ] HTML rendering from JSON
 - [ ] Database note storage
 - [ ] Extension auto-sync logic
-- [ ] Trial usage tracking (backend)
-- [ ] Error handling & retry logic
+- [ ] Error handling for invalid API keys & retry logic
 
-**Deliverable:** Extension can authenticate and sync notes to backend
+**Deliverable:** Extension can authenticate, manage API keys, and sync notes to backend
 
 ---
 
@@ -831,31 +867,32 @@ export const config = {
 
 ---
 
-### Phase 6: Subscriptions & Billing (Week 6-7)
-- [ ] Stripe account setup
-- [ ] Create product & price ($4.99/month)
-- [ ] `POST /api/subscription/checkout` - Create Checkout session
-- [ ] Subscription page in dashboard
-- [ ] Stripe webhook endpoint setup
-- [ ] Webhook event handlers (subscription lifecycle)
-- [ ] Customer Portal integration
-- [ ] Subscription status checks in note generation
-- [ ] Trial limit enforcement (3 notes)
-- [ ] Subscription required gates
-- [ ] Billing page in dashboard
+### Phase 6: API Key Management (Week 6)
+- [ ] API key setup UI in dashboard (input, validate, save)
+- [ ] `POST /api/user/api-key` - Save encrypted API key
+- [ ] `GET /api/user/api-key/status` - Check API key validity
+- [ ] `DELETE /api/user/api-key` - Remove API key
+- [ ] Encryption/decryption utility functions (AES-256-GCM)
+- [ ] API key validation with test Gemini call
+- [ ] Extension API key setup flow (first-time setup)
+- [ ] API key sync between extension and dashboard
+- [ ] Error handling for invalid/expired API keys
+- [ ] Settings page with API key management
+- [ ] "Get API Key" guide/tutorial for users
 
-**Deliverable:** Complete payment system; users can subscribe and billing is enforced
+**Deliverable:** Users can securely store and manage their Gemini API keys
 
 ---
 
 ### Phase 7: Polish & Testing (Week 7-8)
 - [ ] Error handling & user-friendly messages
 - [ ] Loading states & skeleton screens
-- [ ] Empty states (no notes, no folders)
-- [ ] Onboarding flow for new users
-- [ ] Email notifications (welcome, subscription confirmed, trial ending)
+- [ ] Empty states (no notes, no folders, no API key)
+- [ ] Onboarding flow for new users (API key setup guide)
+- [ ] Email notifications (welcome email)
+- [ ] API key setup tutorial/walkthrough
 - [ ] Performance optimization (caching, lazy loading)
-- [ ] Security audit (RLS, rate limits, input validation)
+- [ ] Security audit (RLS, API key encryption, rate limits, input validation)
 - [ ] Cross-browser extension testing
 - [ ] Mobile responsive testing
 - [ ] Beta user testing with 5-10 students
@@ -869,10 +906,11 @@ export const config = {
 - [ ] Chrome Web Store submission (extension)
 - [ ] Domain setup (bevo-notes.com or use .vercel.app)
 - [ ] Production deployment (Vercel + Supabase)
-- [ ] Stripe production mode
+- [ ] Environment variables setup (ENCRYPTION_KEY for API key storage)
 - [ ] Analytics setup (PostHog, Plausible, or similar)
 - [ ] Launch announcement (UT subreddit, class GroupMe's, flyers)
 - [ ] Support channel setup (email or Discord)
+- [ ] API key setup guide/documentation
 - [ ] Monitor error logs & usage metrics
 
 **Deliverable:** Public launch to UT Austin students
@@ -899,8 +937,7 @@ export const config = {
 - **Caching:** Vercel KV (Redis) for transcript hash cache
 
 ### Third-Party Services
-- **AI:** Google Gemini 2.0 Flash (via @google/generative-ai SDK)
-- **Payments:** Stripe (Checkout + Customer Portal + Webhooks)
+- **AI:** Google Gemini 2.0 Flash (via @google/generative-ai SDK, using user's API key)
 - **Email:** Supabase Auth emails (transactional)
 - **Hosting:** Vercel (frontend + API)
 - **Analytics:** PostHog (open-source, privacy-friendly)
@@ -927,14 +964,8 @@ NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJxxx...
 SUPABASE_SERVICE_ROLE_KEY=eyJxxx... # Server-side only
 
-# Google Gemini
-GEMINI_API_KEY=AIzaSyxxx...
-
-# Stripe
-NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_xxx...
-STRIPE_SECRET_KEY=sk_test_xxx...
-STRIPE_WEBHOOK_SECRET=whsec_xxx...
-STRIPE_PRICE_ID=price_xxx... # $4.99/month price ID
+# Encryption (for user API keys)
+ENCRYPTION_KEY=64_character_hex_string # 32-byte AES-256 key, generate with: openssl rand -hex 32
 
 # App Config
 NEXT_PUBLIC_APP_URL=https://bevo-notes.vercel.app
@@ -943,6 +974,9 @@ ALLOWED_EMAIL_DOMAIN=utexas.edu
 # Rate Limiting (Upstash Redis or Vercel KV)
 KV_REST_API_URL=https://xxx.upstash.io
 KV_REST_API_TOKEN=xxx
+
+# Optional: For testing/demo purposes only
+DEMO_GEMINI_API_KEY=AIzaSyxxx... # NOT for production, only for testing API integration
 ```
 
 ---
@@ -973,11 +1007,10 @@ KV_REST_API_TOKEN=xxx
 ### Monitoring & Metrics
 - Daily active users (extension installs + dashboard logins)
 - Notes generated per day
-- Conversion rate (free trial → paid subscriber)
-- Churn rate (monthly subscription cancellations)
+- API key setup completion rate
 - Average notes per user per month
-- Gemini API cost per user
-- Error rates (note generation failures)
+- Error rates (note generation failures, invalid API keys)
+- User retention (weekly/monthly active users)
 
 ---
 
@@ -986,53 +1019,62 @@ KV_REST_API_TOKEN=xxx
 ### MVP Launch Goals (First Semester)
 - [ ] 100 extension installs
 - [ ] 50 registered users (authenticated on dashboard)
-- [ ] 20 paying subscribers ($99.80/month MRR)
+- [ ] 30 users with API keys configured
 - [ ] < 5% note generation error rate
-- [ ] < $50/month in AI costs
+- [ ] < $5/month in infrastructure costs
 - [ ] Positive user feedback (NPS > 30)
+- [ ] 80%+ API key setup completion rate
 
 ### 6-Month Goals
 - [ ] 500 extension installs
 - [ ] 250 registered users
-- [ ] 100 paying subscribers ($499/month MRR)
-- [ ] Break-even on costs
+- [ ] 150+ active users generating notes regularly
+- [ ] Sustained growth without infrastructure cost increases
 - [ ] Feature requests prioritized for V2
+- [ ] Community engagement (Discord/Reddit discussions)
 
 ---
 
 ## Risks & Mitigation
 
-### Risk 1: Low Adoption
+### Risk 1: Low Adoption / API Key Setup Friction
 **Mitigation:**
-- Free trial (3 notes) reduces barrier to entry
-- Student-friendly pricing ($4.99/month)
-- Grassroots marketing (class GroupMe's, Reddit)
-- Referral program (future: give 1 free month for each referral)
+- Clear, step-by-step API key setup guide with screenshots
+- Video tutorial showing how to get Gemini API key
+- Completely free platform (no payment required)
+- Emphasize Gemini free tier (1,500 requests/day = ~1,500 notes/day)
+- Grassroots marketing (class GroupMe's, Reddit, flyers)
 
-### Risk 2: High AI Costs
+### Risk 2: User API Key Security Concerns
 **Mitigation:**
-- Transcript caching (hash-based deduplication)
-- Gemini 2.0 Flash (cheapest viable model)
-- Hard usage caps (100 notes/month per user)
-- Monitoring + alerts for cost spikes
+- Transparent encryption documentation (show we use AES-256-GCM)
+- Open-source codebase (users can audit security)
+- Clear privacy policy (we never use their keys for anything except their notes)
+- Option to use extension-only mode (no cloud sync, no key storage)
+- API key validation before storage
+- User can delete their key anytime
 
-### Risk 3: Stripe Chargebacks
+### Risk 3: Google API Key Abuse / Quota Exhaustion
 **Mitigation:**
-- Clear trial terms (3 free notes, then $4.99/month)
-- Easy cancellation (Customer Portal)
-- Responsive support (handle refund requests quickly)
+- Rate limiting (10 notes/minute per user)
+- Transcript caching (avoid regenerating identical lectures)
+- Character limits (50,000 chars max)
+- User education about Gemini free tier limits
+- Error messages when user hits quota (with guidance)
 
 ### Risk 4: Transcript Quality Issues
 **Mitigation:**
 - Transcript cleaning pipeline (dedupe, fix errors)
 - Fallback to raw transcript if cleaning fails
 - User feedback button ("Report Poor Quality Notes")
+- Clear expectations (AI-generated notes may have errors)
 
 ### Risk 5: UT System Changes
 **Mitigation:**
 - Monitor lecturecapture.la.utexas.edu for updates
 - Extension content script is robust (uses Performance API)
 - Have backup extraction method (direct VTT download)
+- Community can report issues quickly (Discord/email)
 
 ---
 
@@ -1040,33 +1082,41 @@ KV_REST_API_TOKEN=xxx
 
 ### User Support Channels
 - **Email:** support@bevo-notes.com (or Gmail for MVP)
-- **FAQ Page:** Common issues (extension not working, no captions, billing)
-- **In-app Help:** Tooltips, onboarding tour
+- **FAQ Page:** Common issues (extension not working, no captions, API key setup, invalid API key)
+- **In-app Help:** Tooltips, onboarding tour, API key setup guide
+- **Documentation:** Step-by-step guide for getting Gemini API key from Google AI Studio
 
 ### Monitoring Tools
-- **Error Tracking:** Sentry (catch backend errors)
+- **Error Tracking:** Sentry (catch backend errors, API key failures)
 - **Uptime Monitoring:** Vercel built-in or UptimeRobot
-- **Analytics:** PostHog (user behavior, feature usage)
+- **Analytics:** PostHog (user behavior, feature usage, API key setup funnel)
 - **Logs:** Vercel logs (serverless function logs)
 
 ### Maintenance Tasks
-- Weekly: Review error logs, user feedback
-- Monthly: Cost analysis, churn analysis
-- Quarterly: Security audit, dependency updates
+- Weekly: Review error logs, user feedback, API key validation failures
+- Monthly: Usage analysis, infrastructure cost review
+- Quarterly: Security audit (especially encryption), dependency updates
 
 ---
 
 ## Conclusion
 
-This MVP design balances **speed to market** (8-week timeline) with **robust architecture** (Supabase RLS, Stripe webhooks, cost controls). The phased approach allows us to validate the product incrementally:
+This MVP design balances **speed to market** (8-week timeline) with **robust architecture** (Supabase RLS, API key encryption, zero operating costs). The phased approach allows us to validate the product incrementally:
 
-1. **Week 2:** Users can see a beautiful dashboard (even with mock data)
+1. **Week 2:** Users can see a beautiful dashboard (even with mock data) ✅ COMPLETED
 2. **Week 3:** Users can authenticate (proves email restriction works)
-3. **Week 4:** Extension syncs to backend (proves AI pipeline works)
-4. **Week 6:** Users can export notes (proves value beyond just viewing)
-5. **Week 7:** Billing goes live (proves revenue model)
+3. **Week 4:** Extension syncs to backend (proves AI pipeline works with user's API key)
+4. **Week 6:** Users can set up and securely store their Gemini API keys
+5. **Week 7:** Polish and testing (proves robustness)
 6. **Week 8:** Public launch (proves market fit)
 
-By keeping the extension standalone during development, we maintain backwards compatibility and don't block users who want to use the existing functionality. The auto-sync feature seamlessly transitions users to the cloud when they're ready.
+By using a user-provided API key model, we achieve:
+- **Zero ongoing costs:** Users pay Google directly for their own AI usage (typically free tier)
+- **Scalability:** No infrastructure cost scaling with user growth
+- **Privacy:** Users control their own API keys and can delete them anytime
+- **Transparency:** Open about encryption and security practices
+- **Accessibility:** Completely free platform for all students
 
-**Next Steps:** Begin Phase 1 (Dashboard UI) by setting up the design system and building the notes library view with mock data.
+The extension remains standalone-capable, allowing users to generate notes locally without authentication. The cloud sync feature provides the convenience of cross-device access and permanent storage when users are ready.
+
+**Next Steps:** Continue with Phase 2 (Authentication) and Phase 3 (Extension Sync with API Key Management).

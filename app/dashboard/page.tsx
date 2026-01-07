@@ -1,6 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { createClient } from '@/lib/supabase/client';
 import TopNav from '@/components/TopNav';
 import Sidebar from '@/components/Sidebar';
 import NotesGrid from '@/components/NotesGrid';
@@ -79,6 +81,11 @@ const initialNotes: Note[] = [
 ];
 
 export default function DashboardPage() {
+  const router = useRouter();
+  const supabase = createClient();
+
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isDark, setIsDark] = useState(false);
@@ -91,6 +98,34 @@ export default function DashboardPage() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [noteToMove, setNoteToMove] = useState<Note | null>(null);
   const [noteToDelete, setNoteToDelete] = useState<{ id: string; title: string } | null>(null);
+
+  // Check authentication
+  useEffect(() => {
+    const checkAuth = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+
+      if (!user) {
+        router.push('/login');
+        return;
+      }
+
+      setUserEmail(user.email || null);
+      setLoading(false);
+    };
+
+    checkAuth();
+
+    // Listen for auth state changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) {
+        router.push('/login');
+      } else {
+        setUserEmail(session.user.email || null);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [router, supabase]);
 
   // Calculate folder counts
   const foldersWithCounts = folders.map((folder) => ({
@@ -155,6 +190,18 @@ export default function DashboardPage() {
     }
   };
 
+  // Show loading state while checking authentication
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--bg-primary)' }}>
+        <div className="text-center">
+          <div className="w-12 h-12 mx-auto mb-4 rounded-full border-4 border-t-transparent animate-spin" style={{ borderColor: 'var(--accent-primary)', borderTopColor: 'transparent' }}></div>
+          <p style={{ color: 'var(--text-secondary)' }}>Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={isDark ? 'dark' : ''}>
       <div className="min-h-screen bg-bg-primary text-text-primary transition-colors">
@@ -164,6 +211,7 @@ export default function DashboardPage() {
           onSearchChange={setSearchQuery}
           isDark={isDark}
           onThemeToggle={() => setIsDark(!isDark)}
+          userEmail={userEmail}
         />
 
         <div className="flex pt-16">
@@ -178,11 +226,9 @@ export default function DashboardPage() {
 
           {/* Main Content */}
           <main className="flex-1 ml-60">
-            {/* Usage Banner (show for trial users) */}
+            {/* Usage Banner (show if API key not configured) */}
             <UsageBanner
-              planType="trial"
-              notesUsed={2}
-              notesLimit={3}
+              apiKeyStatus="valid"
             />
 
             {/* Notes Grid */}

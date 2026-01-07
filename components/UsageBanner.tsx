@@ -1,13 +1,11 @@
 'use client';
 
 interface UsageBannerProps {
-  planType: 'trial' | 'expired' | 'pro' | null;
-  notesUsed?: number;
-  notesLimit?: number;
+  apiKeyStatus: 'valid' | 'invalid' | 'none';
 }
 
-export default function UsageBanner({ planType, notesUsed = 0, notesLimit = 3 }: UsageBannerProps) {
-  if (planType === 'pro' || !planType) return null;
+export default function UsageBanner({ apiKeyStatus }: UsageBannerProps) {
+  if (apiKeyStatus === 'valid') return null;
 
   return (
     <div
@@ -17,10 +15,10 @@ export default function UsageBanner({ planType, notesUsed = 0, notesLimit = 3 }:
         borderColor: 'rgba(191, 87, 0, 0.2)'
       }}
     >
-      {planType === 'trial' && (
+      {apiKeyStatus === 'none' && (
         <div className="flex items-center gap-4">
           <span className="text-sm" style={{ color: 'var(--text-primary)' }}>
-            ⚡ Free Trial: <strong>{notesUsed} of {notesLimit}</strong> notes used
+            🔑 Set up your Google Gemini API key to start generating notes
           </span>
           <button
             className="px-4 py-1.5 rounded-md text-sm font-medium text-white transition-all"
@@ -30,15 +28,15 @@ export default function UsageBanner({ planType, notesUsed = 0, notesLimit = 3 }:
             onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-hover)'}
             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-primary)'}
           >
-            Subscribe for $4.99/month →
+            Get Started →
           </button>
         </div>
       )}
 
-      {planType === 'expired' && (
+      {apiKeyStatus === 'invalid' && (
         <div className="flex items-center gap-4">
           <span className="text-sm" style={{ color: 'var(--text-primary)' }}>
-            ⚠️ Trial expired. Subscribe to continue generating notes.
+            ⚠️ Your API key is invalid or expired. Please update it to continue.
           </span>
           <button
             className="px-4 py-1.5 rounded-md text-sm font-medium text-white transition-all"
@@ -48,7 +46,7 @@ export default function UsageBanner({ planType, notesUsed = 0, notesLimit = 3 }:
             onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-hover)'}
             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-primary)'}
           >
-            Subscribe Now →
+            Update API Key →
           </button>
         </div>
       )}

@@ -1,13 +1,51 @@
 'use client';
 
+import { useState, useRef, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { createClient } from '@/lib/supabase/client';
+
 interface TopNavProps {
   searchQuery: string;
   onSearchChange: (query: string) => void;
   isDark: boolean;
   onThemeToggle: () => void;
+  userEmail?: string | null;
 }
 
-export default function TopNav({ searchQuery, onSearchChange, isDark, onThemeToggle }: TopNavProps) {
+export default function TopNav({ searchQuery, onSearchChange, isDark, onThemeToggle, userEmail }: TopNavProps) {
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
+  const supabase = createClient();
+
+  // Close profile menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target as Node)) {
+        setShowProfileMenu(false);
+      }
+    };
+
+    if (showProfileMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showProfileMenu]);
+
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    await supabase.auth.signOut();
+    router.push('/login');
+  };
+
+  const getInitial = () => {
+    if (!userEmail) return 'U';
+    return userEmail.charAt(0).toUpperCase();
+  };
   return (
     <nav className="fixed top-0 left-0 right-0 h-16 z-50 border-b transition-colors"
          style={{
@@ -69,14 +107,87 @@ export default function TopNav({ searchQuery, onSearchChange, isDark, onThemeTog
           </button>
 
           {/* Profile Menu */}
-          <button
-            className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold text-sm"
-            style={{
-              background: 'linear-gradient(135deg, #bf5700 0%, #a04a00 100%)'
-            }}
-          >
-            U
-          </button>
+          <div className="relative" ref={profileMenuRef}>
+            <button
+              onClick={() => setShowProfileMenu(!showProfileMenu)}
+              className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold text-sm transition-all"
+              style={{
+                background: 'linear-gradient(135deg, #bf5700 0%, #a04a00 100%)',
+              }}
+            >
+              {getInitial()}
+            </button>
+
+            {showProfileMenu && (
+              <div
+                className="absolute right-0 top-full mt-2 w-64 rounded-lg border shadow-xl overflow-hidden z-10"
+                style={{
+                  backgroundColor: 'var(--bg-primary)',
+                  borderColor: 'var(--border-color)',
+                }}
+              >
+                {/* User Info */}
+                <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border-color)' }}>
+                  <p className="text-xs font-medium" style={{ color: 'var(--text-tertiary)' }}>
+                    Signed in as
+                  </p>
+                  <p className="text-sm font-medium mt-1" style={{ color: 'var(--text-primary)' }}>
+                    {userEmail || 'user@utexas.edu'}
+                  </p>
+                </div>
+
+                {/* Menu Items */}
+                <div className="py-1">
+                  <button
+                    onClick={() => {
+                      router.push('/settings');
+                      setShowProfileMenu(false);
+                    }}
+                    className="w-full px-4 py-2.5 text-left text-sm flex items-center gap-2 transition-colors"
+                    style={{ color: 'var(--text-primary)' }}
+                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-secondary)'}
+                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                  >
+                    <span>⚙️</span>
+                    <span>Settings</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      router.push('/settings#api-key');
+                      setShowProfileMenu(false);
+                    }}
+                    className="w-full px-4 py-2.5 text-left text-sm flex items-center gap-2 transition-colors"
+                    style={{ color: 'var(--text-primary)' }}
+                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-secondary)'}
+                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                  >
+                    <span>🔑</span>
+                    <span>API Key Management</span>
+                  </button>
+                </div>
+
+                <div className="h-px" style={{ backgroundColor: 'var(--border-color)' }}></div>
+
+                {/* Logout */}
+                <div className="py-1">
+                  <button
+                    onClick={handleLogout}
+                    disabled={loggingOut}
+                    className="w-full px-4 py-2.5 text-left text-sm flex items-center gap-2 transition-colors"
+                    style={{ color: loggingOut ? 'var(--text-tertiary)' : '#dc2626' }}
+                    onMouseEnter={(e) => {
+                      if (!loggingOut) e.currentTarget.style.backgroundColor = 'rgba(220, 38, 38, 0.1)';
+                    }}
+                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                  >
+                    <span>🚪</span>
+                    <span>{loggingOut ? 'Logging out...' : 'Log Out'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </nav>

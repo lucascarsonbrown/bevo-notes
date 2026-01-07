@@ -112,7 +112,7 @@
      - Email address (text-secondary, 12px)
      - ──────
      - Settings
-     - Billing & Subscription
+     - API Key Management
      - ──────
      - Log Out
 
@@ -156,7 +156,7 @@
 
 ### 3. Usage Banner
 
-**Display:** Only when user is on trial or free tier
+**Display:** Only when user hasn't set up their API key yet
 **Position:** Top of main content area, below nav, full width
 **Height:** Auto (min 48px)
 **Background:** Linear gradient `var(--accent-light)` to transparent
@@ -164,23 +164,24 @@
 
 **Content:**
 
-**Free Trial:**
+**No API Key Configured:**
 ```
-⚡ Free Trial: 2 of 3 notes used  [Subscribe for $4.99/month →]
-```
-
-**Trial Expired:**
-```
-⚠️ Trial expired. Subscribe to continue generating notes.  [Subscribe Now →]
+🔑 Set up your Google Gemini API key to start generating notes  [Get Started →]
 ```
 
-**Active Subscription:**
-- No banner (or small "✓ Pro" badge in top right)
+**API Key Invalid:**
+```
+⚠️ Your API key is invalid or expired. Please update it to continue.  [Update API Key →]
+```
+
+**API Key Configured:**
+- No banner displayed
 
 **Styling:**
 - Text: 14px, `var(--text-primary)`
 - CTA Button: Orange, solid, rounded 6px
 - Dismissible: ✕ icon on right (hides banner, can be shown again via settings)
+- Link to API key setup guide
 
 ---
 
@@ -448,62 +449,33 @@
    - Email: [user@utexas.edu] (read-only)
    - Joined: October 1, 2024
 
-2. **Preferences**
+2. **API Key Management**
+   - Current Status: ✓ Valid API key configured / ⚠️ No API key / ✗ Invalid API key
+   - Last verified: October 15, 2024, 3:45 PM
+   - **API Key Input:**
+     - Input field: [••••••••••••••••••••••••] (masked)
+     - [Update API Key] button
+     - [Test API Key] button (validates with Gemini API)
+     - [Delete API Key] button (danger action)
+   - **Help Section:**
+     - "Don't have an API key?" link → Opens Google AI Studio guide
+     - Link to setup tutorial
+     - Information about Gemini free tier (1,500 requests/day)
+
+3. **Preferences**
    - Theme: ( ) Light (•) Dark ( ) Auto
    - Default folder for new notes: [Dropdown]
    - Notes per page: [20 ▼]
 
-3. **Extension**
+4. **Extension**
    - Extension installed: ✓ Yes / ✗ Not detected
    - [Download Extension] button (if not installed)
+   - Extension version: 1.0.0
 
-4. **Danger Zone**
+5. **Danger Zone**
    - [Delete All Notes] (confirmation modal)
+   - [Delete API Key] (confirmation modal)
    - [Delete Account] (confirmation modal)
-
----
-
-### 9. Billing Page
-
-**Route:** `/billing`
-**Layout:** Same sidebar + nav, main content centered (max 800px)
-
-**Content:**
-
-```
-┌──────────────────────────────────────┐
-│  Subscription & Billing               │
-├──────────────────────────────────────┤
-│                                       │
-│  Current Plan: Free Trial             │
-│  Status: ✓ Active                     │
-│                                       │
-│  Usage:                               │
-│  ──────────────                       │
-│  2 / 3 free notes used                │
-│  [██████████░░░░░░░░░░░░] 66%         │
-│                                       │
-│  Next billing date: None (trial)      │
-│                                       │
-│  [Upgrade to Pro - $4.99/month →]     │
-│                                       │
-├──────────────────────────────────────┤
-│                                       │
-│  Pro Plan Benefits:                   │
-│  ✓ Unlimited note generation          │
-│  ✓ Cloud sync across devices          │
-│  ✓ Advanced search and filters        │
-│  ✓ Export to PDF, Markdown, HTML      │
-│  ✓ Priority support                   │
-│                                       │
-└──────────────────────────────────────┘
-```
-
-**After Subscribed:**
-- Show: "Current Plan: Pro ($4.99/month)"
-- Show: "Next billing date: Nov 15, 2024"
-- Show: "[Manage Subscription →]" (opens Stripe Customer Portal)
-- Remove usage limit bar
 
 ---
 
@@ -512,9 +484,7 @@
 1. **/** (unauthenticated) → Landing/login page
 2. **/dashboard** → Main notes library (default view)
 3. **/notes/[id]** → Full note view
-4. **/settings** → User settings
-5. **/billing** → Subscription management
-6. **/subscribe** → Stripe Checkout flow (if accessed directly)
+4. **/settings** → User settings and API key management
 
 ---
 
@@ -679,14 +649,14 @@
 ### Phase 3 (Polish)
 - [ ] Animations & transitions
 - [ ] Loading states
-- [ ] Empty states
+- [ ] Empty states (no notes, no API key)
 - [ ] Toasts & notifications
-- [ ] Usage banner
+- [ ] Usage banner (API key setup prompt)
 
 ### Phase 4 (Advanced)
 - [ ] Export functionality
-- [ ] Settings page
-- [ ] Billing page
+- [ ] Settings page with API key management
+- [ ] API key setup guide/tutorial
 - [ ] Keyboard shortcuts
 - [ ] Accessibility audit
 
