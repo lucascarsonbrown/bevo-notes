@@ -1,6 +1,6 @@
 // popup.js
 
-const GEMINI_API_KEY = "AIzaSyDtBIxk6eL8T4xxGIx9ZXC_AIwAP8sJ4X4";
+const GEMINI_API_KEY = ""; // User provides their own key via settings
 
 // Wait for DOM to be ready before accessing elements
 let generateBtn, statusEl, progressContainer, notesPreview, notesContent, viewFullBtn, themeToggle;
