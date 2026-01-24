@@ -1,9 +1,8 @@
-// popup.js
+// popup.js - Bevo Notes Chrome extension popup
 
-const GEMINI_API_KEY = ""; // User provides their own key via settings
-
-// Wait for DOM to be ready before accessing elements
+// DOM elements
 let generateBtn, statusEl, progressContainer, notesPreview, notesContent, viewFullBtn, themeToggle;
+let loginSection, mainSection, userBadge, userEmailEl, logoutBtn, loginBtn, apiKeyWarning, settingsBtn, dashboardLink;
 
 function setProgress(step, message, isError = false) {
   progressContainer.classList.add("active");
@@ -46,6 +45,36 @@ function showNotes(html) {
   notesPreview.classList.add("active");
 }
 
+function showLoggedInUI(email) {
+  loginSection.style.display = "none";
+  mainSection.classList.add("active");
+  userBadge.style.display = "flex";
+  userEmailEl.textContent = email.split("@")[0]; // Show just the username part
+}
+
+function showLoggedOutUI() {
+  loginSection.style.display = "block";
+  mainSection.classList.remove("active");
+  userBadge.style.display = "none";
+}
+
+async function checkApiKeyAndUpdateUI() {
+  try {
+    const status = await window.BevoAuth.checkApiKeyStatus();
+    if (!status.has_key || !status.is_valid) {
+      apiKeyWarning.classList.add("active");
+      generateBtn.disabled = true;
+    } else {
+      apiKeyWarning.classList.remove("active");
+      generateBtn.disabled = false;
+    }
+  } catch {
+    // If we can't check, assume no key
+    apiKeyWarning.classList.add("active");
+    generateBtn.disabled = true;
+  }
+}
+
 // Initialize everything when DOM is ready
 document.addEventListener("DOMContentLoaded", async () => {
   // Get DOM elements
@@ -56,13 +85,27 @@ document.addEventListener("DOMContentLoaded", async () => {
   notesContent = document.getElementById("notes-content");
   viewFullBtn = document.getElementById("view-full");
   themeToggle = document.getElementById("theme-toggle");
+  loginSection = document.getElementById("login-section");
+  mainSection = document.getElementById("main-section");
+  userBadge = document.getElementById("user-badge");
+  userEmailEl = document.getElementById("user-email");
+  logoutBtn = document.getElementById("logout-btn");
+  loginBtn = document.getElementById("login-btn");
+  apiKeyWarning = document.getElementById("api-key-warning");
+  settingsBtn = document.getElementById("settings-btn");
+  dashboardLink = document.getElementById("dashboard-link");
+
+  // Set dashboard link
+  dashboardLink.href = window.BevoAuth.BACKEND_URL + "/dashboard";
+  dashboardLink.addEventListener("click", (e) => {
+    e.preventDefault();
+    chrome.tabs.create({ url: dashboardLink.href });
+  });
 
   // Dark mode toggle
   themeToggle.addEventListener("click", async () => {
     const isDark = document.body.classList.toggle("dark-mode");
     themeToggle.querySelector(".theme-icon").textContent = isDark ? "☀️" : "🌙";
-
-    // Save preference
     await chrome.storage.local.set({ darkMode: isDark });
   });
 
@@ -71,190 +114,114 @@ document.addEventListener("DOMContentLoaded", async () => {
     chrome.tabs.create({ url: chrome.runtime.getURL("notes.html") });
   });
 
-  // Restore notes and theme on popup open
-  const { latestNotesHtml, darkMode } = await chrome.storage.local.get(["latestNotesHtml", "darkMode"]);
+  // Login button
+  loginBtn.addEventListener("click", () => {
+    window.BevoAuth.openLoginPage();
+  });
 
-  // Restore dark mode preference
+  // Logout button
+  logoutBtn.addEventListener("click", async () => {
+    await window.BevoAuth.clearSession();
+    showLoggedOutUI();
+  });
+
+  // Settings button
+  settingsBtn.addEventListener("click", () => {
+    window.BevoAuth.openSettingsPage();
+  });
+
+  // Restore theme preference
+  const { darkMode } = await chrome.storage.local.get(["darkMode"]);
   if (darkMode) {
     document.body.classList.add("dark-mode");
     themeToggle.querySelector(".theme-icon").textContent = "☀️";
   }
 
-  // Restore notes if available
-  if (latestNotesHtml) {
-    showNotes(latestNotesHtml);
+  // Check if user is logged in
+  const user = await window.BevoAuth.getUser();
+  if (user && user.email) {
+    showLoggedInUI(user.email);
+    await checkApiKeyAndUpdateUI();
+
+    // Restore notes if available
+    const { latestNotesHtml } = await chrome.storage.local.get(["latestNotesHtml"]);
+    if (latestNotesHtml) {
+      showNotes(latestNotesHtml);
+    }
+  } else {
+    showLoggedOutUI();
   }
 
   // Generate button click handler
   generateBtn.addEventListener("click", async () => {
-  generateBtn.disabled = true;
-  resetProgress();
-  notesPreview.classList.remove("active");
+    generateBtn.disabled = true;
+    resetProgress();
+    notesPreview.classList.remove("active");
 
-  try {
-    // Step 1: Fetch transcript
-    setProgress(1, "Getting transcript from lecture page...");
-
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-    let response;
     try {
-      response = await chrome.tabs.sendMessage(tab.id, { type: "GET_TRANSCRIPT" });
-    } catch (err) {
-      // Check if it's the "receiving end does not exist" error
-      if (err.message.includes("Receiving end does not exist") || err.message.includes("Could not establish connection")) {
-        throw new Error("Please reload the lecture page and try again. (Extension needs fresh page load)");
+      // Step 1: Fetch transcript
+      setProgress(1, "Getting transcript from lecture page...");
+
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+      let response;
+      try {
+        response = await chrome.tabs.sendMessage(tab.id, { type: "GET_TRANSCRIPT" });
+      } catch (err) {
+        if (err.message.includes("Receiving end does not exist") || err.message.includes("Could not establish connection")) {
+          throw new Error("Please reload the lecture page and try again. (Extension needs fresh page load)");
+        }
+        throw err;
       }
-      throw err;
+
+      if (!response?.ok) {
+        throw new Error(response?.error || "Unknown error getting transcript");
+      }
+
+      const transcript = response.transcript;
+
+      // Step 2: Analyzing
+      setProgress(2, "Analyzing lecture content...");
+      await new Promise(resolve => setTimeout(resolve, 500)); // Brief pause for UX
+
+      // Step 3: Generate with AI via backend
+      setProgress(3, "Generating structured notes with AI...");
+
+      const result = await window.BevoAuth.generateNotes(transcript);
+
+      // Complete all steps
+      document.querySelectorAll(".progress-step").forEach(step => {
+        step.classList.add("complete");
+        step.classList.remove("active");
+      });
+
+      statusEl.textContent = result.cached
+        ? "✓ Notes retrieved from cache!"
+        : "✓ Notes generated successfully!";
+      statusEl.classList.remove("error");
+
+      // Display notes
+      showNotes(result.notes_html);
+
+      // Store for notes.html viewer
+      await chrome.storage.local.set({ latestNotesHtml: result.notes_html });
+
+      generateBtn.disabled = false;
+    } catch (err) {
+      console.error(err);
+
+      // Check for specific error types
+      if (err.message.includes("Session expired") || err.message.includes("Not logged in")) {
+        showLoggedOutUI();
+        setProgress(0, "Please log in to generate notes", true);
+      } else if (err.message.includes("No API key")) {
+        apiKeyWarning.classList.add("active");
+        setProgress(0, "Please add your Gemini API key in settings", true);
+      } else {
+        setProgress(0, "Error: " + err.message, true);
+      }
+
+      generateBtn.disabled = false;
     }
-
-    if (!response?.ok) {
-      throw new Error(response?.error || "Unknown error getting transcript");
-    }
-
-    const transcript = response.transcript;
-
-    // Step 2: Analyzing
-    setProgress(2, "Analyzing lecture content...");
-    await new Promise(resolve => setTimeout(resolve, 500)); // Brief pause for UX
-
-    // Step 3: Generate with AI
-    setProgress(3, "Generating structured notes with AI...");
-    const notesHtml = await summarizeWithGemini(transcript);
-
-    // Complete all steps
-    document.querySelectorAll(".progress-step").forEach(step => {
-      step.classList.add("complete");
-      step.classList.remove("active");
-    });
-
-    statusEl.textContent = "✓ Notes generated successfully!";
-    statusEl.classList.remove("error");
-
-    // Display notes
-    showNotes(notesHtml);
-
-    // Store for notes.html
-    await chrome.storage.local.set({ latestNotesHtml: notesHtml });
-
-    generateBtn.disabled = false;
-  } catch (err) {
-    console.error(err);
-    setProgress(0, "Error: " + err.message, true);
-    generateBtn.disabled = false;
-  }
   });
 });
-
-async function summarizeWithGemini(transcript) {
-  if (!GEMINI_API_KEY || GEMINI_API_KEY === "YOUR_GEMINI_API_KEY_HERE") {
-    throw new Error("Set your Gemini API key in popup.js. Get one at https://aistudio.google.com/apikey");
-  }
-
-  const systemInstruction = `You are turning a raw university lecture transcript into written lecture notes, as if the professor had typed the lecture out cleanly for students.
-
-Your goal is to preserve the lecture content and level of detail, while making it organized, readable, and mathematically precise.
-
-Follow these rules carefully:
-
-1. Overall goal
-   - Rewrite the lecture as structured lecture notes "on paper."
-   - Preserve essentially all substantive content.
-   - Do NOT significantly shorten the lecture.
-
-2. What to keep vs remove
-   - REMOVE: jokes, filler, classroom chatter, technical issues.
-   - KEEP: all mathematical content, examples, reasoning, and any important logistics that affect the student (exams, assignments, grading).
-   - Condense repetition, but do not omit important reasoning.
-
-3. Structure (topic-based)
-   - Break the lecture into sections based on topic transitions.
-   - Output HTML with:
-     - One <h1> lecture title (infer from content if needed).
-     - Multiple <h2> sections, each covering one major topic.
-     - Use <p> for prose and <ul><li> for structured explanations.
-
-4. Definitions, theorems, and formulas
-   - Rewrite definitions and theorems cleanly and precisely.
-   - All mathematical expressions MUST be written using MathML (built-in HTML math).
-   - For simple expressions, you can use Unicode symbols directly (×, ÷, ≤, ≥, ≠, ∞, etc.).
-   - For complex expressions, use MathML tags wrapped in <math> elements.
-   - Example: T(n) = 2<sup>n</sup> - 1 (using <sup> for exponents)
-   - Example: <math><mfrac><mn>1</mn><mn>2</mn></mfrac></math> for fractions
-   - Ensure all math is mathematically equivalent to the lecture.
-
-5. Proofs and reasoning
-   - When a proof or reasoning is presented:
-     - First give an informal explanation describing the intuition.
-     - Then give a formal, structured version using clear steps.
-   - Remain faithful to the lecture content.
-
-6. Examples
-   - Rewrite all examples from the lecture.
-   - Add clarifying steps so the logic is clear in written form.
-   - Do not invent new problems.
-
-7. Tone and style
-   - Sound like professor-written lecture notes.
-   - Clear, precise, and professional.
-   - No study tips or meta commentary.
-   - No need for any practice problems unless given in the lecture.
-
-8. Output format
-   - Output valid HTML only.
-   - Use MathML, HTML superscripts/subscripts, and Unicode symbols for all math.
-   - Use only <h1>, <h2>, <p>, <ul><li>, <sup>, <sub>, and <math> for structure.`;
-
-  const userPrompt = `Apply the rules to the following transcript:
-
-[BEGIN TRANSCRIPT]
-${transcript}
-[END TRANSCRIPT]`;
-
-  // Google Gemini API endpoint for flash-lite model
-  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${GEMINI_API_KEY}`;
-
-  const res = await fetch(apiUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      system_instruction: {
-        parts: [{
-          text: systemInstruction
-        }]
-      },
-      contents: [{
-        parts: [{
-          text: userPrompt
-        }]
-      }],
-      generationConfig: {
-        temperature: 0.4,
-        topK: 40,
-        topP: 0.95,
-        maxOutputTokens: 8192
-      }
-    })
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error("Gemini API error: " + text);
-  }
-
-  const data = await res.json();
-
-  // Extract content from Gemini response
-  if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
-    throw new Error("Unexpected Gemini API response format");
-  }
-
-  let content = data.candidates[0].content.parts[0].text;
-
-  // Remove markdown code fences if present
-  content = content.replace(/^```html\s*/i, '').replace(/\s*```$/, '');
-
-  return content;
-}

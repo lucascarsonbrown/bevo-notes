@@ -1,11 +1,14 @@
 'use client';
 
 interface UsageBannerProps {
-  apiKeyStatus: 'valid' | 'invalid' | 'none';
+  apiKeyStatus: 'valid' | 'invalid' | 'none' | 'missing' | 'loading';
 }
 
 export default function UsageBanner({ apiKeyStatus }: UsageBannerProps) {
-  if (apiKeyStatus === 'valid') return null;
+  if (apiKeyStatus === 'valid' || apiKeyStatus === 'loading') return null;
+
+  // Treat 'missing' the same as 'none'
+  const status = apiKeyStatus === 'missing' ? 'none' : apiKeyStatus;
 
   return (
     <div
@@ -15,7 +18,7 @@ export default function UsageBanner({ apiKeyStatus }: UsageBannerProps) {
         borderColor: 'rgba(191, 87, 0, 0.2)'
       }}
     >
-      {apiKeyStatus === 'none' && (
+      {status === 'none' && (
         <div className="flex items-center gap-4">
           <span className="text-sm" style={{ color: 'var(--text-primary)' }}>
             🔑 Set up your Google Gemini API key to start generating notes
@@ -33,7 +36,7 @@ export default function UsageBanner({ apiKeyStatus }: UsageBannerProps) {
         </div>
       )}
 
-      {apiKeyStatus === 'invalid' && (
+      {status === 'invalid' && (
         <div className="flex items-center gap-4">
           <span className="text-sm" style={{ color: 'var(--text-primary)' }}>
             ⚠️ Your API key is invalid or expired. Please update it to continue.

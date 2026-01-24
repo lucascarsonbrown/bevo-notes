@@ -14,9 +14,10 @@ interface SidebarProps {
   onSelectFolder: (folderId: string | null) => void;
   unorganizedCount: number;
   onCreateFolder: () => void;
+  onDeleteFolder?: (folderId: string) => void;
 }
 
-export default function Sidebar({ folders, selectedFolder, onSelectFolder, unorganizedCount, onCreateFolder }: SidebarProps) {
+export default function Sidebar({ folders, selectedFolder, onSelectFolder, unorganizedCount, onCreateFolder, onDeleteFolder }: SidebarProps) {
   const totalCount = folders.reduce((sum, folder) => sum + folder.count, 0) + unorganizedCount;
 
   return (

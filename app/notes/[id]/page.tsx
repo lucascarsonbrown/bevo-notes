@@ -4,86 +4,20 @@ import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect, useRef } from 'react';
 import DeleteConfirmationModal from '@/components/DeleteConfirmationModal';
 
-// Mock data - will be replaced with real data from database
-const mockNote = {
-  id: '1',
-  title: 'Introduction to Algorithms',
-  date: '2024-03-15',
-  folderId: '1',
-  content: `# Introduction to Algorithms
-
-## Overview
-This lecture covered the fundamental concepts of algorithmic thinking and problem-solving strategies.
-
-## Key Concepts
-
-### 1. Algorithm Complexity
-- **Time Complexity**: Measures how runtime scales with input size
-- **Space Complexity**: Measures memory usage relative to input size
-- Common notations:
-  - O(1) - Constant time
-  - O(log n) - Logarithmic time
-  - O(n) - Linear time
-  - O(n²) - Quadratic time
-
-### 2. Big-O Notation
-Big-O notation describes the upper bound of an algorithm's growth rate. It helps us:
-- Compare algorithm efficiency
-- Predict performance with large datasets
-- Make informed design decisions
-
-### 3. Problem-Solving Strategies
-1. **Divide and Conquer**: Break problem into smaller subproblems
-2. **Dynamic Programming**: Store solutions to overlapping subproblems
-3. **Greedy Algorithms**: Make locally optimal choices
-4. **Backtracking**: Explore all possible solutions systematically
-
-## Example: Binary Search
-
-Binary search is an efficient algorithm for finding an item in a sorted list:
-
-\`\`\`python
-def binary_search(arr, target):
-    left, right = 0, len(arr) - 1
-
-    while left <= right:
-        mid = (left + right) // 2
-
-        if arr[mid] == target:
-            return mid
-        elif arr[mid] < target:
-            left = mid + 1
-        else:
-            right = mid - 1
-
-    return -1
-\`\`\`
-
-**Time Complexity**: O(log n)
-**Space Complexity**: O(1)
-
-## Practice Problems
-1. Implement quicksort and analyze its complexity
-2. Find the kth largest element in an unsorted array
-3. Design an algorithm to detect cycles in a linked list
-
-## Key Takeaways
-- Understanding complexity helps write efficient code
-- Different problems require different algorithmic approaches
-- Practice is essential for developing algorithmic intuition
-
-## Resources
-- Introduction to Algorithms (CLRS textbook)
-- LeetCode for practice problems
-- Visualization tools: VisuAlgo.net`
-};
-
-const mockFolder = {
-  id: '1',
-  name: 'CS 331',
-  icon: '💻',
-  color: '#bf5700'
-};
+interface Note {
+  id: string;
+  title: string;
+  lecture_date: string | null;
+  notes_html: string;
+  created_at: string;
+  folder_id: string | null;
+  folder: {
+    id: string;
+    name: string;
+    color: string;
+    icon: string | null;
+  } | null;
+}
 
 export default function NotePage() {
   const params = useParams();
@@ -91,17 +25,50 @@ export default function NotePage() {
   const [isDark, setIsDark] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [note, setNote] = useState<Note | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
 
   const noteId = params.id as string;
-  const note = mockNote; // TODO: Fetch based on noteId
-  const folder = mockFolder;
 
-  const formattedDate = new Date(note.date).toLocaleDateString('en-US', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric'
-  });
+  // Fetch note from API
+  useEffect(() => {
+    const fetchNote = async () => {
+      try {
+        const res = await fetch(`/api/notes/${noteId}`);
+        if (!res.ok) {
+          if (res.status === 404) {
+            setError('Note not found');
+          } else if (res.status === 401) {
+            router.push('/login');
+            return;
+          } else {
+            setError('Failed to load note');
+          }
+          setLoading(false);
+          return;
+        }
+
+        const data = await res.json();
+        setNote(data);
+        setLoading(false);
+      } catch {
+        setError('Failed to load note');
+        setLoading(false);
+      }
+    };
+
+    fetchNote();
+  }, [noteId, router]);
+
+  const formattedDate = note
+    ? new Date(note.lecture_date || note.created_at).toLocaleDateString('en-US', {
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : '';
 
   // Close export menu when clicking outside
   useEffect(() => {
@@ -120,15 +87,37 @@ export default function NotePage() {
     };
   }, [showExportMenu]);
 
-  const handleDelete = () => {
-    // TODO: Delete note from database
-    router.push('/dashboard');
+  const handleDelete = async () => {
+    if (!note) return;
+
+    try {
+      const res = await fetch(`/api/notes/${note.id}`, {
+        method: 'DELETE',
+      });
+
+      if (res.ok) {
+        router.push('/dashboard');
+      }
+    } catch {
+      console.error('Failed to delete note');
+    }
   };
 
   const handleExport = (format: 'pdf' | 'markdown' | 'html') => {
+    if (!note) return;
+
     if (format === 'markdown') {
-      // Export as Markdown
-      const content = `# ${note.title}\n\n*${formattedDate}*\n\n${note.content}`;
+      // Convert HTML to basic markdown
+      let content = note.notes_html
+        .replace(/<h1[^>]*>(.*?)<\/h1>/gi, '# $1\n\n')
+        .replace(/<h2[^>]*>(.*?)<\/h2>/gi, '## $1\n\n')
+        .replace(/<h3[^>]*>(.*?)<\/h3>/gi, '### $1\n\n')
+        .replace(/<p[^>]*>(.*?)<\/p>/gi, '$1\n\n')
+        .replace(/<li[^>]*>(.*?)<\/li>/gi, '- $1\n')
+        .replace(/<ul[^>]*>|<\/ul>/gi, '\n')
+        .replace(/<[^>]+>/g, '');
+
+      content = `# ${note.title}\n\n*${formattedDate}*\n\n${content}`;
       const blob = new Blob([content], { type: 'text/markdown' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -139,19 +128,6 @@ export default function NotePage() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } else if (format === 'html') {
-      // Export as HTML
-      const htmlContent = note.content
-        .replace(/^# (.*$)/gim, '<h1>$1</h1>')
-        .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-        .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-        .replace(/^- (.*$)/gim, '<li>$1</li>')
-        .replace(/^(\d+)\. (.*$)/gim, '<li>$2</li>')
-        .replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-        .replace(/`([^`]+)`/g, '<code>$1</code>')
-        .replace(/\n\n/g, '</p><p>')
-        .replace(/^(?!<)/gm, '<p>');
-
       const content = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -178,9 +154,8 @@ export default function NotePage() {
   </style>
 </head>
 <body>
-  <h1>${note.title}</h1>
   <p class="date">${formattedDate}</p>
-  <div class="content">${htmlContent}</div>
+  ${note.notes_html}
 </body>
 </html>`;
       const blob = new Blob([content], { type: 'text/html' });
@@ -193,19 +168,6 @@ export default function NotePage() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } else if (format === 'pdf') {
-      // Export as PDF using print dialog
-      const htmlContent = note.content
-        .replace(/^# (.*$)/gim, '<h1>$1</h1>')
-        .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-        .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-        .replace(/^- (.*$)/gim, '<li>$1</li>')
-        .replace(/^(\d+)\. (.*$)/gim, '<li>$2</li>')
-        .replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-        .replace(/`([^`]+)`/g, '<code>$1</code>')
-        .replace(/\n\n/g, '</p><p>')
-        .replace(/^(?!<)/gm, '<p>');
-
       const printWindow = window.open('', '_blank');
       if (printWindow) {
         printWindow.document.write(`<!DOCTYPE html>
@@ -236,9 +198,8 @@ export default function NotePage() {
   </style>
 </head>
 <body>
-  <h1>${note.title}</h1>
   <p class="date">${formattedDate}</p>
-  <div class="content">${htmlContent}</div>
+  ${note.notes_html}
 </body>
 </html>`);
         printWindow.document.close();
@@ -254,6 +215,47 @@ export default function NotePage() {
     setShowExportMenu(false);
   };
 
+  // Loading state
+  if (loading) {
+    return (
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ backgroundColor: 'var(--bg-primary)' }}
+      >
+        <div className="text-center">
+          <div
+            className="w-12 h-12 mx-auto mb-4 rounded-full border-4 border-t-transparent animate-spin"
+            style={{ borderColor: 'var(--accent-primary)', borderTopColor: 'transparent' }}
+          ></div>
+          <p style={{ color: 'var(--text-secondary)' }}>Loading note...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (error || !note) {
+    return (
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ backgroundColor: 'var(--bg-primary)' }}
+      >
+        <div className="text-center">
+          <p className="text-xl mb-4" style={{ color: 'var(--text-primary)' }}>
+            {error || 'Note not found'}
+          </p>
+          <button
+            onClick={() => router.push('/dashboard')}
+            className="px-4 py-2 rounded-lg"
+            style={{ backgroundColor: 'var(--accent-primary)', color: 'white' }}
+          >
+            Back to Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={isDark ? 'dark' : ''}>
       <div className="min-h-screen transition-colors" style={{ backgroundColor: 'var(--bg-primary)' }}>
@@ -262,7 +264,7 @@ export default function NotePage() {
           className="fixed top-0 left-0 right-0 h-16 border-b flex items-center justify-between px-6 z-10"
           style={{
             backgroundColor: 'var(--bg-primary)',
-            borderColor: 'var(--border-color)'
+            borderColor: 'var(--border-color)',
           }}
         >
           {/* Left: Back Button */}
@@ -289,8 +291,8 @@ export default function NotePage() {
               onClick={() => setIsDark(!isDark)}
               className="w-9 h-9 rounded-lg flex items-center justify-center transition-colors"
               style={{ color: 'var(--text-secondary)' }}
-              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-secondary)'}
-              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-secondary)')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
             >
               {isDark ? '☀️' : '🌙'}
             </button>
@@ -303,12 +305,12 @@ export default function NotePage() {
                 style={{
                   backgroundColor: 'var(--bg-secondary)',
                   borderColor: 'var(--border-color)',
-                  color: 'var(--text-primary)'
+                  color: 'var(--text-primary)',
                 }}
-                onMouseEnter={(e) => e.currentTarget.style.borderColor = 'var(--accent-primary)'}
-                onMouseLeave={(e) => e.currentTarget.style.borderColor = 'var(--border-color)'}
+                onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent-primary)')}
+                onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border-color)')}
               >
-                📤 Export {showExportMenu ? '▲' : '▼'}
+                Export {showExportMenu ? '▲' : '▼'}
               </button>
 
               {showExportMenu && (
@@ -316,17 +318,16 @@ export default function NotePage() {
                   className="absolute right-0 top-full mt-2 w-48 rounded-lg border shadow-lg overflow-hidden z-10"
                   style={{
                     backgroundColor: 'var(--bg-primary)',
-                    borderColor: 'var(--border-color)'
+                    borderColor: 'var(--border-color)',
                   }}
                 >
                   <button
                     onClick={() => handleExport('pdf')}
                     className="w-full px-4 py-2.5 text-left text-sm flex items-center gap-2 transition-colors"
                     style={{ color: 'var(--text-primary)' }}
-                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-secondary)'}
-                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-secondary)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                   >
-                    <span>📄</span>
                     <span>Export as PDF</span>
                   </button>
 
@@ -336,10 +337,9 @@ export default function NotePage() {
                     onClick={() => handleExport('markdown')}
                     className="w-full px-4 py-2.5 text-left text-sm flex items-center gap-2 transition-colors"
                     style={{ color: 'var(--text-primary)' }}
-                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-secondary)'}
-                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-secondary)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                   >
-                    <span>📝</span>
                     <span>Markdown (.md)</span>
                   </button>
 
@@ -349,10 +349,9 @@ export default function NotePage() {
                     onClick={() => handleExport('html')}
                     className="w-full px-4 py-2.5 text-left text-sm flex items-center gap-2 transition-colors"
                     style={{ color: 'var(--text-primary)' }}
-                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-secondary)'}
-                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-secondary)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                   >
-                    <span>🌐</span>
                     <span>HTML (.html)</span>
                   </button>
                 </div>
@@ -384,24 +383,21 @@ export default function NotePage() {
             {/* Header */}
             <div className="mb-8">
               {/* Folder Badge */}
-              {folder && (
+              {note.folder && (
                 <div
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold mb-4"
                   style={{
-                    backgroundColor: folder.color,
-                    color: 'white'
+                    backgroundColor: note.folder.color,
+                    color: 'white',
                   }}
                 >
-                  <span>{folder.icon}</span>
-                  <span>{folder.name}</span>
+                  {note.folder.icon && <span>{note.folder.icon}</span>}
+                  <span>{note.folder.name}</span>
                 </div>
               )}
 
               {/* Title */}
-              <h1
-                className="text-4xl font-bold mb-3"
-                style={{ color: 'var(--text-primary)' }}
-              >
+              <h1 className="text-4xl font-bold mb-3" style={{ color: 'var(--text-primary)' }}>
                 {note.title}
               </h1>
 
@@ -414,31 +410,15 @@ export default function NotePage() {
             {/* Divider */}
             <div className="h-px mb-8" style={{ backgroundColor: 'var(--border-color)' }}></div>
 
-            {/* Note Content */}
+            {/* Note Content - render HTML directly */}
             <div
-              className="prose prose-lg max-w-none"
+              className="prose prose-lg max-w-none note-content"
               style={{
                 color: 'var(--text-primary)',
-                lineHeight: '1.8'
+                lineHeight: '1.8',
               }}
-            >
-              <div
-                dangerouslySetInnerHTML={{
-                  __html: note.content
-                    // Simple markdown-like rendering (basic implementation)
-                    .replace(/^# (.*$)/gim, '<h1 style="color: var(--text-primary); font-size: 2.25rem; font-weight: bold; margin-top: 2rem; margin-bottom: 1rem;">$1</h1>')
-                    .replace(/^## (.*$)/gim, '<h2 style="color: var(--text-primary); font-size: 1.875rem; font-weight: bold; margin-top: 1.75rem; margin-bottom: 0.875rem;">$1</h2>')
-                    .replace(/^### (.*$)/gim, '<h3 style="color: var(--text-primary); font-size: 1.5rem; font-weight: bold; margin-top: 1.5rem; margin-bottom: 0.75rem;">$1</h3>')
-                    .replace(/\*\*(.*?)\*\*/g, '<strong style="color: var(--text-primary);">$1</strong>')
-                    .replace(/^- (.*$)/gim, '<li style="color: var(--text-secondary); margin-left: 1.5rem;">$1</li>')
-                    .replace(/^(\d+)\. (.*$)/gim, '<li style="color: var(--text-secondary); margin-left: 1.5rem; list-style-type: decimal;">$2</li>')
-                    .replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre style="background-color: var(--bg-secondary); padding: 1rem; border-radius: 0.5rem; overflow-x: auto; margin: 1rem 0;"><code style="color: var(--text-primary); font-family: monospace; font-size: 0.875rem;">$2</code></pre>')
-                    .replace(/`([^`]+)`/g, '<code style="background-color: var(--bg-secondary); color: var(--accent-primary); padding: 0.125rem 0.375rem; border-radius: 0.25rem; font-family: monospace; font-size: 0.875rem;">$1</code>')
-                    .replace(/\n\n/g, '</p><p style="color: var(--text-secondary); margin-bottom: 1rem;">')
-                    .replace(/^(?!<)/gm, '<p style="color: var(--text-secondary); margin-bottom: 1rem;">')
-                }}
-              />
-            </div>
+              dangerouslySetInnerHTML={{ __html: note.notes_html }}
+            />
           </div>
         </div>
 
@@ -451,6 +431,44 @@ export default function NotePage() {
           itemName={note.title}
         />
       </div>
+
+      <style jsx global>{`
+        .note-content h1 {
+          font-size: 2rem;
+          font-weight: bold;
+          margin-top: 1.5rem;
+          margin-bottom: 1rem;
+          color: var(--text-primary);
+        }
+        .note-content h2 {
+          font-size: 1.5rem;
+          font-weight: bold;
+          margin-top: 1.25rem;
+          margin-bottom: 0.75rem;
+          color: var(--text-primary);
+        }
+        .note-content p {
+          margin-bottom: 1rem;
+          color: var(--text-secondary);
+        }
+        .note-content ul,
+        .note-content ol {
+          margin-left: 1.5rem;
+          margin-bottom: 1rem;
+        }
+        .note-content li {
+          color: var(--text-secondary);
+          margin-bottom: 0.5rem;
+        }
+        .note-content sup {
+          vertical-align: super;
+          font-size: 0.75em;
+        }
+        .note-content sub {
+          vertical-align: sub;
+          font-size: 0.75em;
+        }
+      `}</style>
     </div>
   );
 }

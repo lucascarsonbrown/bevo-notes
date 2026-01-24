@@ -20,7 +20,8 @@
     "host_permissions": [
       "https://lecturecapture.la.utexas.edu/*",
       "https://lectures-engage.la.utexas.edu/*",
-      "https://generativelanguage.googleapis.com/*"
+      "http://localhost:3000/*",
+      "https://*.vercel.app/*"
     ],
     "content_scripts": [
       {

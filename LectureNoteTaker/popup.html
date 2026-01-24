@@ -80,6 +80,12 @@
         color: var(--text-primary);
       }
 
+      .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
       .theme-toggle {
         background: none;
         border: 1px solid var(--border-color);
@@ -100,8 +106,142 @@
         border-color: var(--text-tertiary);
       }
 
+      .user-badge {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px;
+        background: var(--accent-light);
+        border-radius: 8px;
+        font-size: 12px;
+        color: var(--accent-primary);
+        font-weight: 500;
+      }
+
+      .logout-btn {
+        background: none;
+        border: none;
+        color: var(--text-tertiary);
+        cursor: pointer;
+        font-size: 14px;
+        padding: 4px;
+        transition: color 0.2s;
+      }
+
+      .logout-btn:hover {
+        color: #dc2626;
+      }
+
       .content {
         padding: 24px;
+      }
+
+      /* Login Section */
+      .login-section {
+        text-align: center;
+        padding: 32px 24px;
+      }
+
+      .login-section.hidden {
+        display: none;
+      }
+
+      .login-icon {
+        font-size: 48px;
+        margin-bottom: 16px;
+      }
+
+      .login-title {
+        font-size: 18px;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: 8px;
+      }
+
+      .login-desc {
+        font-size: 14px;
+        color: var(--text-secondary);
+        margin-bottom: 24px;
+        line-height: 1.5;
+      }
+
+      .login-btn {
+        width: 100%;
+        padding: 14px 20px;
+        font-size: 15px;
+        font-weight: 600;
+        border-radius: 10px;
+        border: none;
+        cursor: pointer;
+        background: var(--accent-primary);
+        color: white;
+        transition: all 0.2s;
+        box-shadow: var(--shadow-sm);
+      }
+
+      .login-btn:hover {
+        background: var(--accent-hover);
+        box-shadow: var(--shadow-md);
+        transform: translateY(-1px);
+      }
+
+      /* Main Section */
+      .main-section {
+        display: none;
+      }
+
+      .main-section.active {
+        display: block;
+      }
+
+      /* API Key Warning */
+      .api-key-warning {
+        background: #fef2f2;
+        border: 1px solid #fecaca;
+        border-radius: 8px;
+        padding: 12px 16px;
+        margin-bottom: 16px;
+        display: none;
+      }
+
+      .api-key-warning.active {
+        display: block;
+      }
+
+      body.dark-mode .api-key-warning {
+        background: #2d1a1a;
+        border-color: #7f1d1d;
+      }
+
+      .api-key-warning-text {
+        font-size: 13px;
+        color: #dc2626;
+        margin-bottom: 8px;
+      }
+
+      body.dark-mode .api-key-warning-text {
+        color: #fca5a5;
+      }
+
+      .api-key-warning-btn {
+        background: none;
+        border: 1px solid #dc2626;
+        color: #dc2626;
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+
+      .api-key-warning-btn:hover {
+        background: rgba(220, 38, 38, 0.1);
+      }
+
+      body.dark-mode .api-key-warning-btn {
+        border-color: #fca5a5;
+        color: #fca5a5;
       }
 
       .generate-btn {
@@ -322,6 +462,20 @@
       .notes-content::-webkit-scrollbar-thumb:hover {
         background: var(--text-tertiary);
       }
+
+      .dashboard-link {
+        display: block;
+        text-align: center;
+        margin-top: 16px;
+        color: var(--accent-primary);
+        text-decoration: none;
+        font-size: 13px;
+        font-weight: 500;
+      }
+
+      .dashboard-link:hover {
+        text-decoration: underline;
+      }
     </style>
   </head>
   <body>
@@ -330,12 +484,39 @@
         <div class="logo">B</div>
         <h1>Bevo Notes</h1>
       </div>
-      <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">
-        <span class="theme-icon">🌙</span>
+      <div class="header-actions">
+        <div class="user-badge" id="user-badge" style="display: none;">
+          <span id="user-email"></span>
+          <button class="logout-btn" id="logout-btn" title="Sign out">✕</button>
+        </div>
+        <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">
+          <span class="theme-icon">🌙</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Login Section (shown when not logged in) -->
+    <div class="login-section" id="login-section">
+      <div class="login-icon">🔐</div>
+      <h2 class="login-title">Sign in to Continue</h2>
+      <p class="login-desc">
+        Sign in with your UT Austin email to generate and sync your lecture notes to the cloud.
+      </p>
+      <button class="login-btn" id="login-btn">
+        Sign in with UT Email
       </button>
     </div>
 
-    <div class="content">
+    <!-- Main Section (shown when logged in) -->
+    <div class="content main-section" id="main-section">
+      <!-- API Key Warning -->
+      <div class="api-key-warning" id="api-key-warning">
+        <p class="api-key-warning-text">
+          No Gemini API key configured. Add one in settings to generate notes.
+        </p>
+        <button class="api-key-warning-btn" id="settings-btn">Open Settings</button>
+      </div>
+
       <button class="generate-btn" id="generate">
         <span>Generate AI Notes</span>
       </button>
@@ -365,8 +546,11 @@
         </div>
         <div class="notes-content" id="notes-content"></div>
       </div>
+
+      <a href="#" class="dashboard-link" id="dashboard-link">Open Dashboard →</a>
     </div>
 
+    <script src="auth.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
