@@ -66,7 +66,13 @@ export async function POST(request: Request) {
     );
   }
 
-  const encryptedKey = encrypt(api_key);
+  let encryptedKey: string;
+  try {
+    encryptedKey = encrypt(api_key);
+  } catch (encryptError) {
+    console.error('Encryption error:', encryptError);
+    return NextResponse.json({ error: 'Encryption failed - check ENCRYPTION_KEY env var' }, { status: 500 });
+  }
 
   const { error } = await supabase
     .from('users')
@@ -78,7 +84,8 @@ export async function POST(request: Request) {
     .eq('id', user.id);
 
   if (error) {
-    return NextResponse.json({ error: 'Failed to save API key' }, { status: 500 });
+    console.error('Supabase update error:', error);
+    return NextResponse.json({ error: 'Failed to save API key: ' + error.message }, { status: 500 });
   }
 
   return NextResponse.json({ success: true, validated: true });
