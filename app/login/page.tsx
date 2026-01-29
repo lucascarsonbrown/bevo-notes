@@ -142,11 +142,13 @@ export default function LoginPage() {
           <p>
             Don't have the extension yet?{' '}
             <a
-              href="#"
+              href="https://github.com/lucasbrown/bevo-notes#installation"
+              target="_blank"
+              rel="noopener noreferrer"
               className="font-medium underline"
               style={{ color: 'var(--accent-primary)' }}
             >
-              Download from Chrome Web Store
+              View installation instructions
             </a>
           </p>
         </div>

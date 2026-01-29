@@ -137,8 +137,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     themeToggle.querySelector(".theme-icon").textContent = "☀️";
   }
 
-  // Check if user is logged in
-  const user = await window.BevoAuth.getUser();
+  // Sync session from web app (in case user logged in via browser)
+  // This also checks if existing session is still valid
+  const user = await window.BevoAuth.syncSession();
   if (user && user.email) {
     showLoggedInUI(user.email);
     await checkApiKeyAndUpdateUI();

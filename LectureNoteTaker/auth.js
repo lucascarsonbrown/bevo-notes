@@ -1,6 +1,7 @@
 // auth.js - Authentication module for Bevo Notes Chrome extension
 
-const BACKEND_URL = 'http://localhost:3000'; // Change to production URL when deployed
+// Get backend URL from config (see config.js for environment settings)
+const BACKEND_URL = typeof CONFIG !== 'undefined' ? CONFIG.BACKEND_URL : 'http://localhost:3000';
 
 // Storage keys
 const SESSION_KEY = 'bevo_session';
@@ -121,6 +122,33 @@ async function checkApiKeyStatus() {
   return response.json();
 }
 
+/**
+ * Sync session from web app cookies
+ * Call this on popup open to detect if user logged in via web
+ * @returns {Promise<{email: string} | null>}
+ */
+async function syncSession() {
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/auth/me`, {
+      credentials: 'include',
+    });
+
+    if (response.ok) {
+      const user = await response.json();
+      // User is logged in via web, save to chrome storage
+      await saveSession({ authenticated: true }, { email: user.email });
+      return { email: user.email };
+    } else {
+      // Not logged in, clear any stale session
+      await clearSession();
+      return null;
+    }
+  } catch {
+    // Network error, keep existing session state
+    return await getUser();
+  }
+}
+
 // Export functions for use in popup.js
 window.BevoAuth = {
   isLoggedIn,
@@ -132,5 +160,6 @@ window.BevoAuth = {
   openSettingsPage,
   generateNotes,
   checkApiKeyStatus,
+  syncSession,
   BACKEND_URL,
 };

@@ -1,10 +1,13 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
+
 interface UsageBannerProps {
   apiKeyStatus: 'valid' | 'invalid' | 'none' | 'missing' | 'loading';
 }
 
 export default function UsageBanner({ apiKeyStatus }: UsageBannerProps) {
+  const router = useRouter();
   if (apiKeyStatus === 'valid' || apiKeyStatus === 'loading') return null;
 
   // Treat 'missing' the same as 'none'
@@ -30,6 +33,7 @@ export default function UsageBanner({ apiKeyStatus }: UsageBannerProps) {
             }}
             onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-hover)'}
             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-primary)'}
+            onClick={() => router.push('/settings')}
           >
             Get Started →
           </button>
@@ -48,6 +52,7 @@ export default function UsageBanner({ apiKeyStatus }: UsageBannerProps) {
             }}
             onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-hover)'}
             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-primary)'}
+            onClick={() => router.push('/settings')}
           >
             Update API Key →
           </button>
