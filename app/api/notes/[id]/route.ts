@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 
-export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const supabase = await createClient();
   const { id } = await params;
 
@@ -26,12 +26,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       created_at,
       updated_at,
       folder_id,
-      folders (
-        id,
-        name,
-        color,
-        icon
-      )
+      course_id,
+      unit_id,
+      folders (id, name, color, icon),
+      courses (id, course_code, course_name, color, icon),
+      units (id, name)
     `
     )
     .eq('id', id)
@@ -52,7 +51,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     created_at: note.created_at,
     updated_at: note.updated_at,
     folder_id: note.folder_id,
+    course_id: note.course_id,
+    unit_id: note.unit_id,
     folder: note.folders,
+    course: note.courses,
+    unit: note.units,
   });
 }
 
@@ -75,13 +78,15 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { title, folder_id, lecture_date } = body;
+  const { title, folder_id, lecture_date, course_id, unit_id } = body;
 
   // Build update object with only provided fields
   const updates: Record<string, unknown> = {};
   if (title !== undefined) updates.title = title;
   if (folder_id !== undefined) updates.folder_id = folder_id;
   if (lecture_date !== undefined) updates.lecture_date = lecture_date;
+  if (course_id !== undefined) updates.course_id = course_id;
+  if (unit_id !== undefined) updates.unit_id = unit_id;
 
   if (Object.keys(updates).length === 0) {
     return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
@@ -127,7 +132,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   });
 }
 
-export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const supabase = await createClient();
   const { id } = await params;
 

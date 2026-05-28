@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
-import { decrypt } from '@/lib/utils/encryption';
 import { createHash } from 'crypto';
+import { checkLimit, limitErrorResponse } from '@/lib/usage';
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent';
 const MAX_TRANSCRIPT_LENGTH = 50000;
@@ -110,9 +110,6 @@ ${transcript}
   // Remove markdown code fences if present
   content = content.replace(/^```html\s*/i, '').replace(/\s*```$/, '');
 
-  // Extract tokens used if available
-  const tokensUsed = data.usageMetadata?.totalTokenCount || null;
-
   return content;
 }
 
@@ -168,25 +165,18 @@ export async function POST(request: Request) {
     });
   }
 
-  // Get user's API key
-  const { data: userData, error: userError } = await supabase
-    .from('users')
-    .select('gemini_api_key_encrypted')
-    .eq('id', user.id)
-    .single();
-
-  if (userError || !userData?.gemini_api_key_encrypted) {
+  // Enforce free tier note limit before generating
+  const limitCheck = await checkLimit(supabase, user.id, 'notes');
+  if (!limitCheck.allowed) {
     return NextResponse.json(
-      { error: 'No API key configured. Please add your Gemini API key in Settings.' },
-      { status: 400 }
+      { error: limitErrorResponse('notes', limitCheck.current, limitCheck.limit) },
+      { status: 403 }
     );
   }
 
-  let apiKey: string;
-  try {
-    apiKey = decrypt(userData.gemini_api_key_encrypted);
-  } catch {
-    return NextResponse.json({ error: 'Failed to decrypt API key' }, { status: 500 });
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json({ error: 'Service not configured' }, { status: 503 });
   }
 
   // Generate notes with Gemini
@@ -195,15 +185,6 @@ export async function POST(request: Request) {
     notesHtml = await generateWithGemini(transcript, apiKey);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-
-    // Mark API key as invalid if it's an auth error
-    if (message.includes('API_KEY_INVALID') || message.includes('401')) {
-      await supabase
-        .from('users')
-        .update({ api_key_is_valid: false })
-        .eq('id', user.id);
-    }
-
     return NextResponse.json({ error: `Failed to generate notes: ${message}` }, { status: 500 });
   }
 

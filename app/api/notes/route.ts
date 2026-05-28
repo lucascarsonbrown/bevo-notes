@@ -14,6 +14,8 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const folderId = searchParams.get('folder_id');
+  const courseId = searchParams.get('course_id');
+  const unitId = searchParams.get('unit_id');
   const search = searchParams.get('search');
   const limit = parseInt(searchParams.get('limit') || '50', 10);
   const offset = parseInt(searchParams.get('offset') || '0', 10);
@@ -29,12 +31,11 @@ export async function GET(request: Request) {
       created_at,
       updated_at,
       folder_id,
-      folders (
-        id,
-        name,
-        color,
-        icon
-      )
+      course_id,
+      unit_id,
+      folders (id, name, color, icon),
+      courses (id, course_code, course_name, color, icon),
+      units (id, name)
     `,
       { count: 'exact' }
     )
@@ -42,11 +43,18 @@ export async function GET(request: Request) {
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1);
 
-  // Filter by folder
+  // Filter by folder (legacy)
   if (folderId === 'null' || folderId === 'unorganized') {
     query = query.is('folder_id', null);
   } else if (folderId) {
     query = query.eq('folder_id', folderId);
+  }
+
+  // Filter by course or unit
+  if (unitId) {
+    query = query.eq('unit_id', unitId);
+  } else if (courseId) {
+    query = query.eq('course_id', courseId);
   }
 
   // Search by title
@@ -60,7 +68,6 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Failed to fetch notes' }, { status: 500 });
   }
 
-  // Transform notes to include folder info at top level
   const transformedNotes = notes?.map((note) => ({
     id: note.id,
     title: note.title,
@@ -69,7 +76,11 @@ export async function GET(request: Request) {
     created_at: note.created_at,
     updated_at: note.updated_at,
     folder_id: note.folder_id,
+    course_id: note.course_id,
+    unit_id: note.unit_id,
     folder: note.folders,
+    course: note.courses,
+    unit: note.units,
   }));
 
   return NextResponse.json({

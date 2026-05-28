@@ -4,7 +4,7 @@ interface DeleteConfirmationModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: () => void;
-  itemType: 'note' | 'folder';
+  itemType: 'note' | 'folder' | 'course' | 'unit';
   itemName: string;
 }
 
@@ -46,7 +46,7 @@ export default function DeleteConfirmationModal({
               <span className="text-xl">⚠️</span>
             </div>
             <h2 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>
-              Delete {itemType === 'note' ? 'Note' : 'Folder'}?
+              Delete {itemType.charAt(0).toUpperCase() + itemType.slice(1)}?
             </h2>
           </div>
           <button
@@ -63,14 +63,24 @@ export default function DeleteConfirmationModal({
         {/* Content */}
         <div className="p-6">
           <p className="text-sm mb-4" style={{ color: 'var(--text-secondary)' }}>
-            {itemType === 'note' ? (
-              <>
-                Are you sure you want to delete <strong style={{ color: 'var(--text-primary)' }}>"{itemName}"</strong>? This action cannot be undone.
-              </>
-            ) : (
+            {itemType === 'folder' ? (
               <>
                 Are you sure you want to delete the folder <strong style={{ color: 'var(--text-primary)' }}>"{itemName}"</strong>?
                 All notes in this folder will be moved to Unorganized. This action cannot be undone.
+              </>
+            ) : itemType === 'course' ? (
+              <>
+                Are you sure you want to delete <strong style={{ color: 'var(--text-primary)' }}>{itemName}</strong>?
+                All notes, units, and materials in this course will be permanently deleted.
+              </>
+            ) : itemType === 'unit' ? (
+              <>
+                Are you sure you want to delete the unit <strong style={{ color: 'var(--text-primary)' }}>"{itemName}"</strong>?
+                Notes in this unit will remain in the course but will no longer be assigned to a unit.
+              </>
+            ) : (
+              <>
+                Are you sure you want to delete <strong style={{ color: 'var(--text-primary)' }}>"{itemName}"</strong>? This action cannot be undone.
               </>
             )}
           </p>
@@ -112,7 +122,7 @@ export default function DeleteConfirmationModal({
             onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#b91c1c'}
             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#dc2626'}
           >
-            Delete {itemType === 'note' ? 'Note' : 'Folder'}
+            Delete {itemType.charAt(0).toUpperCase() + itemType.slice(1)}
           </button>
         </div>
       </div>

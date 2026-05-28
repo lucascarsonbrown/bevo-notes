@@ -154,7 +154,7 @@ export default function TopNav({ searchQuery, onSearchChange, isDark, onThemeTog
 
                   <button
                     onClick={() => {
-                      router.push('/settings#api-key');
+                      router.push('/pricing');
                       setShowProfileMenu(false);
                     }}
                     className="w-full px-4 py-2.5 text-left text-sm flex items-center gap-2 transition-colors"
@@ -162,8 +162,8 @@ export default function TopNav({ searchQuery, onSearchChange, isDark, onThemeTog
                     onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-secondary)'}
                     onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                   >
-                    <span>🔑</span>
-                    <span>API Key Management</span>
+                    <span>⭐</span>
+                    <span>Upgrade Plan</span>
                   </button>
                 </div>
 

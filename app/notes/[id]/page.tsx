@@ -2,6 +2,7 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect, useRef } from 'react';
+import { useTheme } from '@/lib/hooks/useTheme';
 import DeleteConfirmationModal from '@/components/DeleteConfirmationModal';
 
 interface Note {
@@ -22,7 +23,7 @@ interface Note {
 export default function NotePage() {
   const params = useParams();
   const router = useRouter();
-  const [isDark, setIsDark] = useState(false);
+  const { isDark, toggle: toggleTheme } = useTheme();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [note, setNote] = useState<Note | null>(null);
@@ -288,7 +289,7 @@ export default function NotePage() {
           <div className="flex items-center gap-3">
             {/* Theme Toggle */}
             <button
-              onClick={() => setIsDark(!isDark)}
+              onClick={toggleTheme}
               className="w-9 h-9 rounded-lg flex items-center justify-center transition-colors"
               style={{ color: 'var(--text-secondary)' }}
               onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-secondary)')}

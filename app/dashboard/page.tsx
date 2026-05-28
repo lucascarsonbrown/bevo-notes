@@ -4,50 +4,22 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import TopNav from '@/components/TopNav';
-import Sidebar from '@/components/Sidebar';
-import NotesGrid from '@/components/NotesGrid';
 import UsageBanner from '@/components/UsageBanner';
-import CreateFolderModal from '@/components/CreateFolderModal';
-import MoveFolderModal from '@/components/MoveFolderModal';
+import CreateCourseModal from '@/components/CreateCourseModal';
 import DeleteConfirmationModal from '@/components/DeleteConfirmationModal';
+import { useTheme } from '@/lib/hooks/useTheme';
 
-interface Note {
+interface Course {
   id: string;
-  title: string;
-  date: string;
-  folderId?: string;
-  preview: string;
-}
-
-interface Folder {
-  id: string;
-  name: string;
+  course_code: string;
+  course_name: string;
+  semester: string | null;
+  year: number | null;
+  professor: string | null;
+  color: string;
   icon: string;
-  color: string;
-  count: number;
-}
-
-interface ApiNote {
-  id: string;
-  title: string;
-  lecture_date: string | null;
-  preview: string;
-  created_at: string;
-  folder_id: string | null;
-  folder: {
-    id: string;
-    name: string;
-    color: string;
-    icon: string | null;
-  } | null;
-}
-
-interface ApiFolder {
-  id: string;
-  name: string;
-  color: string;
-  icon: string | null;
   noteCount: number;
+  materialCount: number;
 }
 
 export default function DashboardPage() {
@@ -56,227 +28,97 @@ export default function DashboardPage() {
 
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isDark, setIsDark] = useState(false);
-  const [folders, setFolders] = useState<Folder[]>([]);
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [unorganizedCount, setUnorganizedCount] = useState(0);
-  const [apiKeyStatus, setApiKeyStatus] = useState<'loading' | 'valid' | 'missing' | 'invalid'>('loading');
+  const { isDark, toggle: toggleTheme } = useTheme();
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [courseToDelete, setCourseToDelete] = useState<{ id: string; course_code: string; course_name: string } | null>(null);
 
-  // Modal states
-  const [isCreateFolderModalOpen, setIsCreateFolderModalOpen] = useState(false);
-  const [isMoveModalOpen, setIsMoveModalOpen] = useState(false);
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [noteToMove, setNoteToMove] = useState<Note | null>(null);
-  const [noteToDelete, setNoteToDelete] = useState<{ id: string; title: string } | null>(null);
-
-  // Fetch notes from API
-  const fetchNotes = useCallback(async () => {
+  const fetchCourses = useCallback(async () => {
     try {
-      const params = new URLSearchParams();
-      if (selectedFolder && selectedFolder !== 'all') {
-        params.set('folder_id', selectedFolder);
-      }
-      if (searchQuery) {
-        params.set('search', searchQuery);
-      }
-
-      const res = await fetch(`/api/notes?${params.toString()}`);
+      const res = await fetch('/api/courses');
       if (!res.ok) return;
-
       const data = await res.json();
-      const transformedNotes: Note[] = data.notes.map((note: ApiNote) => ({
-        id: note.id,
-        title: note.title,
-        date: note.lecture_date || note.created_at,
-        folderId: note.folder_id || undefined,
-        preview: note.preview,
-      }));
-      setNotes(transformedNotes);
-    } catch (error) {
-      console.error('Failed to fetch notes:', error);
-    }
-  }, [selectedFolder, searchQuery]);
-
-  // Fetch folders from API
-  const fetchFolders = useCallback(async () => {
-    try {
-      const res = await fetch('/api/folders');
-      if (!res.ok) return;
-
-      const data = await res.json();
-      const transformedFolders: Folder[] = data.folders.map((folder: ApiFolder) => ({
-        id: folder.id,
-        name: folder.name,
-        icon: folder.icon || '',
-        color: folder.color,
-        count: folder.noteCount,
-      }));
-      setFolders(transformedFolders);
-      setUnorganizedCount(data.unorganizedCount);
-    } catch (error) {
-      console.error('Failed to fetch folders:', error);
+      setCourses(data.courses);
+    } catch (err) {
+      console.error('Failed to fetch courses:', err);
     }
   }, []);
 
-  // Check API key status
-  const checkApiKeyStatus = useCallback(async () => {
-    try {
-      const res = await fetch('/api/user/api-key/status');
-      if (!res.ok) {
-        setApiKeyStatus('missing');
-        return;
-      }
-
-      const data = await res.json();
-      if (!data.has_key) {
-        setApiKeyStatus('missing');
-      } else if (!data.is_valid) {
-        setApiKeyStatus('invalid');
-      } else {
-        setApiKeyStatus('valid');
-      }
-    } catch {
-      setApiKeyStatus('missing');
-    }
-  }, []);
-
-  // Check authentication
   useEffect(() => {
     const checkAuth = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        router.push('/login');
-        return;
-      }
-
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { router.push('/login'); return; }
       setUserEmail(user.email || null);
       setLoading(false);
-
-      // Fetch data after auth is confirmed
-      await Promise.all([fetchNotes(), fetchFolders(), checkApiKeyStatus()]);
+      await fetchCourses();
     };
 
     checkAuth();
 
-    // Listen for auth state changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) {
-        router.push('/login');
-      } else {
-        setUserEmail(session.user.email || null);
-      }
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) router.push('/login');
+      else setUserEmail(session.user.email || null);
     });
 
     return () => subscription.unsubscribe();
-  }, [router, supabase, fetchNotes, fetchFolders, checkApiKeyStatus]);
+  }, [router, supabase, fetchCourses]);
 
-  // Refetch notes when filter changes
-  useEffect(() => {
-    if (!loading) {
-      fetchNotes();
-    }
-  }, [selectedFolder, searchQuery, loading, fetchNotes]);
-
-  // Folder CRUD operations
-  const handleCreateFolder = async (name: string, icon: string, color: string) => {
+  const handleCreateCourse = async (data: {
+    course_code: string;
+    course_name: string;
+    semester: string;
+    year: number;
+    professor: string;
+    color: string;
+    icon: string;
+  }) => {
     try {
-      const res = await fetch('/api/folders', {
+      const res = await fetch('/api/courses', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, icon, color }),
+        body: JSON.stringify(data),
       });
-
       if (!res.ok) {
-        const data = await res.json();
-        alert(data.error || 'Failed to create folder');
+        const err = await res.json();
+        alert(err.error || 'Failed to create course');
         return;
       }
-
-      await fetchFolders();
-    } catch (error) {
-      console.error('Failed to create folder:', error);
+      await fetchCourses();
+    } catch (err) {
+      console.error('Failed to create course:', err);
     }
   };
 
-  const handleDeleteFolder = async (folderId: string) => {
+  const handleDeleteCourse = async () => {
+    if (!courseToDelete) return;
     try {
-      const res = await fetch(`/api/folders/${folderId}`, {
-        method: 'DELETE',
-      });
-
-      if (!res.ok) return;
-
-      await Promise.all([fetchFolders(), fetchNotes()]);
-
-      if (selectedFolder === folderId) {
-        setSelectedFolder(null);
-      }
-    } catch (error) {
-      console.error('Failed to delete folder:', error);
+      const res = await fetch(`/api/courses/${courseToDelete.id}`, { method: 'DELETE' });
+      if (res.ok) await fetchCourses();
+      setCourseToDelete(null);
+    } catch (err) {
+      console.error('Failed to delete course:', err);
     }
   };
 
-  // Note operations
-  const handleMoveNote = async (noteId: string, folderId: string | undefined) => {
-    try {
-      const res = await fetch(`/api/notes/${noteId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder_id: folderId || null }),
-      });
+  const filteredCourses = courses.filter((c) => {
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      c.course_code.toLowerCase().includes(q) ||
+      c.course_name.toLowerCase().includes(q) ||
+      c.professor?.toLowerCase().includes(q)
+    );
+  });
 
-      if (!res.ok) return;
-
-      await Promise.all([fetchNotes(), fetchFolders()]);
-    } catch (error) {
-      console.error('Failed to move note:', error);
-    }
-  };
-
-  const handleDeleteNote = (noteId: string) => {
-    const note = notes.find((n) => n.id === noteId);
-    if (note) {
-      setNoteToDelete({ id: note.id, title: note.title });
-      setIsDeleteModalOpen(true);
-    }
-  };
-
-  const confirmDeleteNote = async () => {
-    if (!noteToDelete) return;
-
-    try {
-      const res = await fetch(`/api/notes/${noteToDelete.id}`, {
-        method: 'DELETE',
-      });
-
-      if (!res.ok) return;
-
-      await Promise.all([fetchNotes(), fetchFolders()]);
-      setNoteToDelete(null);
-    } catch (error) {
-      console.error('Failed to delete note:', error);
-    }
-  };
-
-  // Show loading state while checking authentication
   if (loading) {
     return (
-      <div
-        className="min-h-screen flex items-center justify-center"
-        style={{ backgroundColor: 'var(--bg-primary)' }}
-      >
+      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--bg-primary)' }}>
         <div className="text-center">
           <div
             className="w-12 h-12 mx-auto mb-4 rounded-full border-4 border-t-transparent animate-spin"
             style={{ borderColor: 'var(--accent-primary)', borderTopColor: 'transparent' }}
-          ></div>
+          />
           <p style={{ color: 'var(--text-secondary)' }}>Loading...</p>
         </div>
       </div>
@@ -286,72 +128,163 @@ export default function DashboardPage() {
   return (
     <div className={isDark ? 'dark' : ''}>
       <div className="min-h-screen bg-bg-primary text-text-primary transition-colors">
-        {/* Top Navigation */}
         <TopNav
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
           isDark={isDark}
-          onThemeToggle={() => setIsDark(!isDark)}
+          onThemeToggle={toggleTheme}
           userEmail={userEmail}
         />
 
-        <div className="flex pt-16">
-          {/* Sidebar */}
-          <Sidebar
-            folders={folders}
-            selectedFolder={selectedFolder}
-            onSelectFolder={setSelectedFolder}
-            unorganizedCount={unorganizedCount}
-            onCreateFolder={() => setIsCreateFolderModalOpen(true)}
-            onDeleteFolder={handleDeleteFolder}
-          />
+        <div className="pt-16">
+          <UsageBanner />
 
-          {/* Main Content */}
-          <main className="flex-1 ml-60">
-            {/* Usage Banner (show if API key not configured) */}
-            <UsageBanner apiKeyStatus={apiKeyStatus} />
+          <main className="max-w-6xl mx-auto px-6 py-8">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-8">
+              <div>
+                <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>My Courses</h1>
+                <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>
+                  {courses.length} course{courses.length !== 1 ? 's' : ''}
+                </p>
+              </div>
+              <button
+                onClick={() => setIsCreateModalOpen(true)}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium text-white transition-all"
+                style={{ backgroundColor: 'var(--accent-primary)' }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-hover)'}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-primary)'}
+              >
+                + Add Course
+              </button>
+            </div>
 
-            {/* Notes Grid */}
-            <NotesGrid
-              notes={notes}
-              folders={folders}
-              onDeleteNote={handleDeleteNote}
-              onMoveNote={(note) => {
-                setNoteToMove(note);
-                setIsMoveModalOpen(true);
-              }}
-            />
+            {/* Courses Grid */}
+            {filteredCourses.length === 0 ? (
+              <div
+                className="rounded-xl border p-16 text-center"
+                style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
+              >
+                {searchQuery ? (
+                  <>
+                    <div className="text-5xl mb-4">🔍</div>
+                    <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>No courses match</h3>
+                    <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Try a different search.</p>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-5xl mb-4">📚</div>
+                    <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>Add your first course</h3>
+                    <p className="text-sm mb-6" style={{ color: 'var(--text-secondary)' }}>
+                      Organize your notes and materials by course.
+                    </p>
+                    <button
+                      onClick={() => setIsCreateModalOpen(true)}
+                      className="px-6 py-2.5 rounded-lg text-sm font-medium text-white transition-all"
+                      style={{ backgroundColor: 'var(--accent-primary)' }}
+                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-hover)'}
+                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-primary)'}
+                    >
+                      Add Course →
+                    </button>
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                {filteredCourses.map((course) => (
+                  <CourseCard
+                    key={course.id}
+                    course={course}
+                    onClick={() => router.push(`/courses/${course.id}`)}
+                    onDelete={() => setCourseToDelete({ id: course.id, course_code: course.course_code, course_name: course.course_name })}
+                  />
+                ))}
+              </div>
+            )}
           </main>
         </div>
 
-        {/* Modals */}
-        <CreateFolderModal
-          isOpen={isCreateFolderModalOpen}
-          onClose={() => setIsCreateFolderModalOpen(false)}
-          onCreateFolder={handleCreateFolder}
-        />
-
-        <MoveFolderModal
-          isOpen={isMoveModalOpen}
-          onClose={() => {
-            setIsMoveModalOpen(false);
-            setNoteToMove(null);
-          }}
-          note={noteToMove}
-          folders={folders}
-          onMoveNote={handleMoveNote}
+        <CreateCourseModal
+          isOpen={isCreateModalOpen}
+          onClose={() => setIsCreateModalOpen(false)}
+          onCreateCourse={handleCreateCourse}
         />
 
         <DeleteConfirmationModal
-          isOpen={isDeleteModalOpen}
-          onClose={() => {
-            setIsDeleteModalOpen(false);
-            setNoteToDelete(null);
-          }}
-          onConfirm={confirmDeleteNote}
-          itemType="note"
-          itemName={noteToDelete?.title || ''}
+          isOpen={!!courseToDelete}
+          onClose={() => setCourseToDelete(null)}
+          onConfirm={handleDeleteCourse}
+          itemType="course"
+          itemName={courseToDelete ? `${courseToDelete.course_code} — ${courseToDelete.course_name}` : ''}
         />
+      </div>
+    </div>
+  );
+}
+
+function CourseCard({
+  course,
+  onClick,
+  onDelete,
+}: {
+  course: Course;
+  onClick: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      className="rounded-xl border overflow-hidden transition-all cursor-pointer group"
+      style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
+      onClick={onClick}
+      onMouseEnter={(e) => e.currentTarget.style.borderColor = course.color}
+      onMouseLeave={(e) => e.currentTarget.style.borderColor = 'var(--border-color)'}
+    >
+      {/* Color bar */}
+      <div className="h-1.5" style={{ backgroundColor: course.color }} />
+
+      <div className="p-5">
+        <div className="flex items-start justify-between mb-3">
+          <span className="text-3xl">{course.icon}</span>
+          <button
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            className="opacity-0 group-hover:opacity-100 w-7 h-7 rounded-md flex items-center justify-center transition-all text-sm"
+            style={{ color: 'var(--text-secondary)' }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = 'rgba(220, 38, 38, 0.1)';
+              e.currentTarget.style.color = '#dc2626';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+              e.currentTarget.style.color = 'var(--text-secondary)';
+            }}
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="mb-4">
+          <p className="text-xs font-semibold mb-0.5" style={{ color: course.color }}>
+            {course.course_code}
+          </p>
+          <h3 className="font-semibold text-base leading-snug" style={{ color: 'var(--text-primary)' }}>
+            {course.course_name}
+          </h3>
+          {(course.semester || course.professor) && (
+            <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+              {[course.semester && `${course.semester} ${course.year}`, course.professor].filter(Boolean).join(' · ')}
+            </p>
+          )}
+        </div>
+
+        <div className="flex items-center gap-4 pt-3 border-t" style={{ borderColor: 'var(--border-color)' }}>
+          <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+            {course.noteCount} note{course.noteCount !== 1 ? 's' : ''}
+          </span>
+          <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+            {course.materialCount} material{course.materialCount !== 1 ? 's' : ''}
+          </span>
+        </div>
       </div>
     </div>
   );
