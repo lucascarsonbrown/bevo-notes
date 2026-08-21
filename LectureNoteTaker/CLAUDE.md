@@ -2,60 +2,62 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Overview
+## Scope
 
-**Bevo Notes** is a Chrome extension (Manifest V3) that extracts captions from UT Lectures Online and generates AI-organized study notes using OpenAI's API.
+This is the Chrome extension (Manifest V3) for Bevo Notes. The repo root has its own `CLAUDE.md` covering the web app and the shared `lib/ai` pipeline — read that first; this file only covers extension-specific concerns.
 
-## Architecture
+## The model runs here, locally
 
-### Component Flow
-1. **content.js** - Content script injected into `lecturecapture.la.utexas.edu` pages
-   - Monitors network requests for caption_proxy URLs (using Performance API)
-   - Fetches VTT caption files and converts them to plain text
-   - Responds to messages from popup requesting transcripts
+The extension generates notes with **WebLLM on WebGPU, on the user's own machine**. There is no OpenAI key, no Gemini key, and no server-side inference. Any earlier documentation describing a hardcoded API key is obsolete.
 
-2. **popup.js** - Extension popup interface
-   - Sends GET_TRANSCRIPT message to content script on active tab
-   - Calls OpenAI API with structured prompt to generate HTML notes
-   - Stores generated notes in chrome.storage.local
-   - Opens notes.html in a new tab with the results
+Requires **Chrome 124+** — that is when WebGPU became available in extension contexts.
 
-3. **notes.js** - Notes display page
-   - Retrieves stored notes HTML from chrome.storage.local
-   - Renders the AI-generated content
+## Component flow
 
-### Key Technical Details
+1. **`content.js`** — injected into `lecturecapture.la.utexas.edu`. Finds the `caption_proxy` URL via the Performance API and returns the **raw VTT** plus a flattened transcript. Returning raw VTT is deliberate: the timestamps let `lib/ai/chunk.ts` split on the lecturer's pauses instead of at arbitrary character offsets.
 
-- **Caption Extraction**: Uses `performance.getEntriesByType("resource")` to find the caption_proxy request URL, then fetches and parses VTT format
-- **Message Passing**: Chrome extension message passing between popup and content script with async sendResponse pattern
-- **Storage**: Uses chrome.storage.local API to pass generated HTML between popup and notes page
-- **OpenAI Integration**: Calls chat completions API with a structured prompt requesting specific sections (Key Definitions, Examples, Quick Quiz)
+2. **`popup.js`** — UI only. Asks the service worker for a capability check, requests the transcript, then hands off. It does not generate. Closing the popup does not cancel a run; on reopen it reattaches to `bevo_generation_state` in `chrome.storage.local`.
 
-## Configuration
+3. **`background.js`** — service worker. Owns the offscreen document's lifecycle and mirrors progress into storage.
 
-**API Key**: The OpenAI API key is hardcoded in popup.js:3. To update it, modify the `OPENAI_API_KEY` constant.
+4. **`offscreen.js`** — hosts the model. Checks the server for an existing note by transcript hash, generates, then saves.
 
-**Target Sites**: The extension has host_permissions for:
-- lecturecapture.la.utexas.edu
-- lectures-engage.la.utexas.edu
-- api.openai.com
+5. **`notes.js` / `notes.html`** — viewer for the most recent notes.
 
-## Loading the Extension
+### Why generation lives in an offscreen document
 
-Since this is an unpacked extension:
-1. Open Chrome and navigate to `chrome://extensions/`
-2. Enable "Developer mode"
-3. Click "Load unpacked"
-4. Select the `/Users/lucasbrown/Desktop/PersonalProjects/LectureNoteTaker` directory
+Not the popup: it closes on focus loss, killing a run mid-way. Not the service worker: MV3 can terminate it on the idle timer. A lecture takes several passes and minutes to finish, so it needs a context that survives both.
 
-## Testing
+## Build step
 
-To test the extension:
-1. Navigate to a lecture page on lecturecapture.la.utexas.edu
-2. Play the video and enable captions (CC button)
-3. Scrub through the video to trigger caption loading
-4. Click the extension icon and press "Generate AI notes for this lecture"
+`vendor/bevo-ai.js` is **generated** — it is `lib/ai` plus WebLLM bundled by esbuild, and it is gitignored. From the repo root:
 
-**Common Issues**:
-- If "No caption_proxy request found" error appears, ensure captions are enabled and the video has been scrubbed to load caption data
-- If OpenAI API errors occur, verify the API key is valid and has sufficient credits
+```bash
+npm run build:extension
+```
+
+Run this after any change under `lib/ai/`, or the extension keeps executing the previous bundle. A fresh clone must run it before the extension will load at all.
+
+MV3 forbids remote code, which is why everything ships inside the package. The extension shares the web app's modules on purpose — a hand-written copy of the chunking, merge, and rendering logic would drift from the tested one.
+
+## Loading and testing
+
+1. `npm run build:extension` from the repo root.
+2. `chrome://extensions/` → enable Developer mode → Load unpacked → select this directory.
+3. Open a lecture on `lecturecapture.la.utexas.edu`, enable CC, and scrub to force caption loading.
+4. Click the extension icon and generate.
+
+The user must be logged in to the web app first — the extension authenticates by sending that session cookie to the backend.
+
+**Expect the first run to be slow.** It downloads ~880 MB of weights before generating anything, then runs several passes. Subsequent runs load from cache.
+
+## Common issues
+
+- **"No caption_proxy request found"** — captions weren't enabled, or the video hasn't been scrubbed to trigger caption loading.
+- **"Please reload the lecture page"** — the content script only injects on a fresh page load, so it's missing if the extension was installed or reloaded while the page was already open.
+- **Generation unavailable** — the capability check failed. Either WebGPU is missing, the graphics driver is blocklisted (adapter request returns null), or there isn't enough GPU-addressable memory for the model. This is a supported state, not a bug.
+- **Stale behavior after editing `lib/ai/`** — `npm run build:extension` wasn't re-run.
+
+## Before shipping
+
+`config.js` has an `IS_PRODUCTION` flag that must be flipped, and `PROD_URL` is still a placeholder Vercel URL.

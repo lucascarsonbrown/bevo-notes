@@ -2,253 +2,171 @@
 
 ## Overview
 
-Bevo Notes is an AI-powered study platform for students. Users upload course materials (syllabi, textbooks), generate structured lecture notes with AI, and create study tools (flashcards, multiple choice, free response) from that content. The platform manages all AI API keys — users never supply their own.
+Bevo Notes turns UT Austin lecture captions into structured study notes and practice material. **Every model call runs in the student's browser**, on their own GPU, through WebLLM. The platform holds no AI API keys, pays no per-token cost, and sends no lecture content to a third party.
 
 ---
 
 ## System Map
 
 ```
-Browser (Next.js frontend)
-        │
-        ▼
-Vercel (Next.js App Router)
-  ├── Pages & UI
-  └── API Routes (/app/api/...)
-        │
-        ├──────────────────────────────► Supabase
-        │   auth, user data, notes,      (Postgres + Auth + Storage)
-        │   courses, materials, quizzes
-        │
-        ├──────────────────────────────► Gemini API (Google)
-        │   note generation,             (platform key, not user-supplied)
-        │   fallback quiz generation,
-        │   material text extraction
-        │
-        ├──────────────────────────────► Stripe
-        │   subscription checkout,       (payments + webhooks)
-        │   billing portal,
-        │   webhook sync
-        │
-        └──────────────────────────────► FastAPI Service (Railway)
-            RAG quiz generation,         (Python, ChromaDB, LangGraph)
-            semantic search,
-            content ingestion
+Chrome Extension (MV3)                     Browser (Next.js app)
+  ├── content.js                             ├── Pages & UI
+  │     reads VTT captions                   ├── lib/ai — WebLLM, RAG
+  ├── background.js (service worker)         │     generation, grading
+  │     owns offscreen lifecycle             └── IndexedDB vector store
+  └── offscreen.js
+        ├── WebLLM (WebGPU) ── generation
+        └── vendor/bevo-ai.js (bundled lib/ai)
+                    │
+                    │  save / read only
+                    ▼
+        Vercel (Next.js App Router)
+          └── API routes — persistence only, no inference
+                    │
+                    ▼
+                 Supabase
+        (Postgres + Auth + Storage, RLS on)
 ```
 
----
-
-## Services
-
-### 1. Next.js on Vercel
-The main application. Handles all frontend rendering and acts as the API layer between the browser and external services. Every sensitive operation (AI calls, DB writes, Stripe) goes through Next.js API routes — the browser never calls Gemini or Supabase directly with privileged credentials.
-
-**Key pages:**
-- `/dashboard` — course overview, usage stats
-- `/courses/[id]` — course detail, units, materials
-- `/notes/[id]` — rich text note editor
-- `/courses/[id]/study/[toolId]` — flashcard/quiz interface
-- `/pricing` — plan selection
-- `/settings` — account, subscription management
+There is no AI service tier. There is no Python service. There is no external model provider.
 
 ---
 
-### 2. Supabase
-Handles authentication and the primary database.
+## Where inference happens
 
-**Auth:** Email/password via Supabase Auth. Session cookies managed server-side with `@supabase/ssr`. The `/auth/callback` route handles OAuth redirects.
+| Task | Runs | Model |
+|---|---|---|
+| Lecture notes | Extension offscreen document | `Llama-3.2-1B-Instruct-q4f16_1-MLC` |
+| Study tools | Web app | same |
+| Free-response grading | Web app | same |
+| Embeddings (RAG) | Web app | `snowflake-arctic-embed-s-q0f32-MLC-b4` |
 
-**Database tables:**
-| Table | Purpose |
-|-------|---------|
-| `users` | Profile, subscription tier, Stripe customer/subscription IDs |
-| `courses` | Top-level course containers |
-| `units` | Subdivisions of a course (Week 1, Chapter 2, etc.) |
-| `notes` | AI-generated lecture notes, stored as HTML |
-| `materials` | Uploaded files (syllabus, textbook) with extracted text |
-| `quizzes` | Generated study tools (questions stored as JSON) |
-| `folders` | Optional note organization |
-
-**Row-level security (RLS)** is enabled on all tables — users can only read/write their own data.
+A `full`-capability user downloads roughly 1.1 GB once, cached by the browser thereafter.
 
 ---
 
-### 3. Gemini API (Google)
-The platform's AI backbone. A single `GEMINI_API_KEY` is set server-side — users never see or manage it.
+## The context budget
 
-**Used for:**
-- **Note generation** (`/api/notes/generate`) — converts raw lecture text into structured HTML notes using `gemini-2.0-flash`
-- **Quiz generation fallback** (`/api/study/generate`) — when the FastAPI RAG service is unavailable, generates questions directly from raw note text
-- **Quiz grading fallback** (`/api/study/grade`) — scores free-response answers when FastAPI is unavailable
-- **Material text extraction** (`/api/materials/[id]/process`) — extracts readable text from uploaded syllabi and textbooks
-- **Unit suggestion** (`/api/courses/[id]/units/suggest`) — suggests unit structure from a syllabus
+The binding constraint on the whole design: **4096 tokens, holding prompt and completion together.**
 
-**Models used:**
-- `gemini-2.0-flash` — primary, used for note generation and quiz generation
-- `gemini-2.0-flash-lite` — lightweight, used for grading and intent parsing
+| | tokens |
+|---|---|
+| System prompt | ~350 |
+| Output reserve | ~1000 |
+| Transcript per pass | ~2400 (≈9,500 chars) |
 
----
+A 50,000-character lecture becomes **~5 passes**. It does not merely overflow a single call — it exceeds the window about fivefold, so chunking is structural rather than an optimization.
 
-### 4. Stripe
-Handles all payment and subscription logic.
+### Note generation pipeline
 
-**Flow:**
-1. User clicks "Get Pro" on `/pricing`
-2. Frontend POSTs to `/api/stripe/checkout` → creates a Stripe Checkout Session → redirects user to Stripe-hosted payment page
-3. On success, Stripe redirects to `/dashboard?upgraded=1`
-4. Stripe sends a `checkout.session.completed` webhook to `/api/stripe/webhook`
-5. Webhook retrieves the subscription, maps the price ID to `pro` tier, updates the `users` table in Supabase
+1. **Capture** — `content.js` returns raw VTT so timings survive.
+2. **Parse** — `lib/ai/chunk.ts` builds timestamped cues and collapses rolling-caption duplicates.
+3. **Chunk** — split at the longest silence in the tail of each buffer. Professors pause at topic transitions, so silence is a free topic boundary; fixed-width cuts split proofs mid-derivation.
+4. **Generate** — one constrained-decoding pass per chunk against `CHUNK_SCHEMA`, returning flat JSON. Passes are independent.
+5. **Merge** — `lib/ai/merge.ts`, deterministic: fold duplicate headings, dedupe definitions by normalized term (first wins), dedupe key points.
+6. **Title** — the one reduce-step model call, over headings only.
+7. **Render** — `lib/ai/render.ts` produces HTML and converts LaTeX to MathML via KaTeX.
+8. **Persist** — POST both `notes_json` and `notes_html`.
 
-**Webhook events handled:**
-| Event | Action |
-|-------|--------|
-| `checkout.session.completed` | Retrieve subscription, sync tier to DB |
-| `customer.subscription.created` | Sync tier to DB |
-| `customer.subscription.updated` | Sync tier to DB (handles plan changes) |
-| `customer.subscription.resumed` | Sync tier to DB |
-| `customer.subscription.deleted` | Reset user to `free` tier |
-| `customer.subscription.paused` | Reset user to `free` tier |
+**Why the merge is not a model call:** five chunks of output run to thousands of tokens, hitting the same 4096-token wall the chunking exists to work around. Combining generated notes through the model reproduces the original problem one layer up. The reduce step must stay deterministic.
 
-**Billing portal:** Paid users can manage/cancel via Stripe's hosted portal, accessed from `/settings` → calls `/api/stripe/portal` → redirects to Stripe.
+**Why the model never emits markup:** it writes LaTeX into a data field and the renderer produces MathML. This makes malformed markup structurally impossible and plays to training-data strengths — small models have seen far more LaTeX than MathML.
 
-**Plans:**
-| Tier | Price | Limits |
-|------|-------|--------|
-| Free | $0 | 1 course, 6 notes, 5 quizzes (all lifetime) |
-| Pro | $10/mo | Unlimited everything, 100 quizzes/month soft cap |
+**What constrained decoding does and doesn't buy:** schemas make invalid JSON impossible. They say nothing about whether the content is correct. A well-formed `definitions` array can still be wrong.
 
 ---
 
-### 5. FastAPI Service on Railway (Python)
-A separate Python microservice that handles semantic search and AI-powered quiz generation via a RAG (Retrieval Augmented Generation) pipeline. Deployed independently from the Next.js app.
+## Capability gating
 
-**Authentication:** All requests require an `x-service-secret` header matching the `SERVICE_SECRET` env var shared between Next.js and Railway.
+`lib/ai/capability.ts` checks `navigator.gpu`, requests an adapter, and compares `maxBufferSize` / `maxStorageBufferBindingSize` against the model's published `vram_required_MB` — all **before** any download.
 
-**Components:**
+| Mode | Condition | Behavior |
+|---|---|---|
+| `full` | limits ≥ 879 MB | Llama-3.2-1B + embeddings |
+| `reduced` | limits ≥ 376 MB | SmolLM2-360M, no semantic retrieval |
+| `readonly` | no WebGPU, null adapter, or below 376 MB | read/organize/export only |
 
-#### ChromaDB (vector database)
-- Runs embedded within the FastAPI process (persistent local directory)
-- Stores text chunks as vector embeddings
-- One collection per user+course: `u{user_id[:16]}_c{course_id[:16]}`
-- Used to retrieve semantically relevant content before generating quizzes
+Browser support is no longer the limiting factor (~84% globally per caniuse; Firefox is the holdout). **Memory is.** On integrated graphics and Apple Silicon the GPU draws from shared system RAM, so a loaded browser on an 8 GB machine can fail to allocate. A null adapter typically means a blocklisted driver rather than absent hardware.
 
-#### Embeddings
-- Uses Gemini `text-embedding-004` REST API
-- Text is chunked into ~1000 character segments with 150 character overlap before embedding
+Read-only users keep the whole product except generation. **There is no server-side fallback** — removing external APIs removed the last one, and that is a deliberate trade.
 
-#### LangGraph Quiz Pipeline
-Runs as a directed graph with three nodes:
+---
 
-```
-Orchestrator → Retrieval → Generator → END
-```
+## Extension (MV3)
 
-- **Orchestrator** — parses the user's intent and rewrites their query into a search-optimized form using `gemini-2.0-flash-lite`
-- **Retrieval** — embeds the refined query, queries ChromaDB with optional unit/material filters, returns top-k relevant chunks
-- **Generator** — builds a context string from retrieved chunks (capped at 40k chars), calls `gemini-2.0-flash` to produce a JSON array of questions
+Generation lives in an **offscreen document**. The popup would die on focus loss and a service worker can be killed on the idle timer; a lecture takes minutes. `background.js` owns the document and mirrors progress into `chrome.storage.local` (`bevo_generation_state`) so the popup can reattach to a run in progress.
 
-**Grading:** A standalone `grade_answer()` function retrieves 5 relevant context chunks and uses Gemini to score the student's answer (0–100) with source citations.
+Before generating, the extension asks `GET /api/notes/generate?transcript_hash=` so a student never waits minutes for a note they already have.
 
-**API endpoints:**
+MV3 forbids remote code, so `scripts/build-extension.mjs` bundles `lib/ai` and WebLLM into `LectureNoteTaker/vendor/bevo-ai.js` (~6 MB, gitignored). The extension shares the web app's modules rather than duplicating the pipeline.
+
+Requires Chrome 124+, where WebGPU became available in extension contexts.
+
+---
+
+## Local RAG
+
+Indexing and retrieval are entirely client-side:
+
+- `@langchain/textsplitters` splits section text (1000 chars, 150 overlap).
+- `WebLLMEmbeddings` implements LangChain's `Embeddings` over the arctic-embed model.
+- `lib/ai/vectorstore.ts` persists vectors in IndexedDB and searches by brute-force cosine similarity — per-course corpora are small enough that an index would be premature.
+
+Generation is driven through WebLLM directly rather than `ChatWebLLM`, which has known breakage against recent web-llm releases (langchainjs#5648); this also avoids depending on the very large `@langchain/community`.
+
+### Consequences of deleting the server-side vector store
+
+- **Per-device.** The index is built locally and lost when site data is cleared.
+- **Per-origin.** Extension and web app have separate IndexedDB stores; each rebuilds its own from server-held notes via `ensureNotesIndexed`.
+- **Not universal.** Notes predating `notes_json` cannot be indexed. Retrieval returning nothing is expected; callers fall back to raw note text.
+
+---
+
+## API routes
+
+Every route validates auth and ownership against Supabase and performs **no inference**.
+
 | Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/health` | Health check (used by Next.js before every RAG call) |
-| POST | `/ingest/text` | Chunk, embed, and store text content in ChromaDB |
-| POST | `/ingest/pdf` | Download PDF, extract text, chunk, embed, store |
-| DELETE | `/ingest/` | Remove all chunks for a given material |
-| POST | `/search/query` | Semantic search with optional filters |
-| POST | `/quiz/generate` | Run LangGraph pipeline, return questions |
-| POST | `/quiz/grade` | Grade a student answer with citations |
+|---|---|---|
+| GET | `/api/notes/generate?transcript_hash=` | Pre-flight cache check |
+| POST | `/api/notes/generate` | Save a client-generated note |
+| POST | `/api/study/generate` | Save client-generated questions |
+| GET | `/api/notes?include_content=1` | Full note text for browser-side generation |
+| POST | `/api/materials/[id]/process` | Decode `.txt`/`.md`; 415 otherwise |
+| GET | `/api/usage` | Display counts (no gating) |
+
+The server hashes transcripts itself rather than trusting a client hash. The client's `crypto.subtle` SHA-256 is verified to match Node's `createHash('sha256')` byte-for-byte, including non-ASCII input — dedupe fails silently if these diverge.
+
+**Trust boundary:** with generation client-side, the server can't attest that a note was model-produced. Accepted.
 
 ---
 
-## Request Flows
+## Data model
 
-### Generating a Lecture Note
-```
-User pastes lecture text in browser
-  → POST /api/notes/generate
-  → Supabase: verify auth, check limit (free tier lifetime cap)
-  → Gemini flash: generate structured HTML notes
-  → Supabase: save note to `notes` table
-  → Return HTML to browser → render in editor
-```
+| Table | Purpose |
+|---|---|
+| `users` | Profile. No subscription or billing columns as of v4. |
+| `courses` | Course containers |
+| `units` | Course subdivisions |
+| `notes` | `notes_json` (structured) + `notes_html` (rendered) |
+| `materials` | Uploaded `.txt`/`.md` with extracted text |
+| `quizzes` | Generated study tools (JSON) |
+| `folders` | Optional organization |
 
-### Generating a Quiz (with RAG)
-```
-User selects units/materials, clicks Generate
-  → POST /api/study/generate
-  → Supabase: verify auth, check quiz limit (free lifetime / pro monthly)
-  → GET FastAPI /health (3s timeout)
-      ├── FastAPI available:
-      │     POST /quiz/generate → LangGraph pipeline
-      │     Orchestrator refines query → Retrieval pulls chunks from ChromaDB
-      │     Generator produces questions from retrieved context
-      │     Return questions to Next.js
-      └── FastAPI unavailable:
-            Fetch notes + material text from Supabase
-            POST to Gemini directly with raw text
-            Parse JSON response
-  → Supabase: save quiz to `quizzes` table
-  → Return questions to browser
-```
-
-### Stripe Subscription
-```
-User clicks "Get Pro" on /pricing
-  → POST /api/stripe/checkout
-  → Supabase: look up stripe_customer_id
-  → Stripe: create customer if new, create Checkout Session
-  → Redirect browser to Stripe hosted checkout
-  → User pays
-  → Stripe: POST to /api/stripe/webhook (checkout.session.completed)
-  → Webhook: retrieve subscription, map price_id → 'pro'
-  → Supabase: update users SET subscription_tier = 'pro'
-  → User lands on /dashboard?upgraded=1
-```
+Migrations are hand-run in order: `supabase-schema-v2.sql` → `v3` → `v4`. RLS on all tables.
 
 ---
 
-## Environment Variables
+## Environment
 
-### Next.js (Vercel)
-| Variable | Purpose |
-|----------|---------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase public anon key |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase admin key (server-only) |
-| `NEXT_PUBLIC_APP_URL` | Production URL (e.g. https://www.bevonotes.com) |
-| `GEMINI_API_KEY` | Google Gemini platform key |
-| `STRIPE_SECRET_KEY` | Stripe secret key |
-| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret |
-| `STRIPE_PRO_PRICE_ID` | Stripe price ID for the Pro plan |
-| `FASTAPI_URL` | URL of the Railway FastAPI service |
-| `SERVICE_SECRET` | Shared secret for Next.js ↔ FastAPI auth |
+Supabase only: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_APP_URL`.
 
-### FastAPI (Railway)
-| Variable | Purpose |
-|----------|---------|
-| `GEMINI_API_KEY` | Google Gemini platform key (same as Next.js) |
-| `SERVICE_SECRET` | Must match Next.js `SERVICE_SECRET` |
-| `CHROMA_PERSIST_DIR` | Directory for ChromaDB storage (default: `/data/chroma`) |
-| `ALLOWED_ORIGINS` | CORS origins (set to your Vercel URL) |
+No AI keys. No payment keys. No service secrets.
 
 ---
 
-## Graceful Degradation
+## Cost model
 
-The FastAPI service is optional. Every route that calls FastAPI first checks `/health` with a 3-second timeout. If the service is down or not yet deployed, the system falls back to calling Gemini directly with raw text from Supabase. This means:
+Inference is free at the margin — it runs on hardware the student already owns. Remaining costs are Vercel hosting, Supabase, and storage. There is no metering to enforce and, as of v4, no billing code.
 
-- Quiz generation always works (just without semantic retrieval)
-- Grading always works (just without source citations)
-- The app can be deployed and used before Railway is set up
-
----
-
-## Subscription & Usage Enforcement
-
-Usage limits are checked server-side in every relevant API route via `checkLimit()` in `lib/usage.ts`.
-
-- **Free tier:** Lifetime counts — once a user hits the cap on notes, quizzes, etc., they must upgrade. Counts never reset.
-- **Pro tier:** Monthly quiz cap (100/month, resets on the 1st). Everything else is unlimited.
-- **Unlimited tier check:** `subscription_tier` is read from the `users` table on every request. Stripe webhooks keep this in sync in real time.
+The trade is quality and reach: a 1B model does not match a frontier hosted model on a 45-minute lecture, and users without capable hardware get a read-only product.

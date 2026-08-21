@@ -4,72 +4,113 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-Bevo Notes is an AI study platform for UT Austin students. One repo, **three independently deployed pieces**:
+Bevo Notes turns UT Austin lecture captions into study notes. **All inference runs in the student's browser** via WebLLM on WebGPU — there are no external LLM API calls anywhere in this codebase, and adding one would undo the core architectural decision.
+
+Two deployed pieces:
 
 | Piece | Location | Deploy target |
 |---|---|---|
-| Next.js 16 web app + API layer | `app/`, `components/`, `lib/` | Vercel |
-| Python FastAPI RAG service | `python-service/` | Railway (Docker) |
+| Next.js 16 web app + persistence API | `app/`, `components/`, `lib/` | Vercel |
 | Chrome extension (MV3) | `LectureNoteTaker/` | Loaded unpacked / Chrome Web Store |
 
-`docs/architecture.md` is the long-form reference (request flows, DB tables, Stripe webhook table, env var tables). Read it before any cross-service change. `GOAL.md` holds product intent.
+`docs/architecture.md` is the long-form reference. `MVP_DESIGN.md` holds product intent but predates this architecture in most sections — treat it as historical except where noted.
 
 ## Commands
 
 ```bash
-npm run dev            # Next.js dev server on :3000
-npm run build          # production build (also the only type-check — tsconfig is noEmit)
-npm run lint           # eslint (flat config, next core-web-vitals + typescript)
-
-# FastAPI service
-cd python-service && pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+npm run dev               # Next.js dev server on :3000
+npm run build             # production build — also the only type-check (tsconfig is noEmit)
+npm run lint              # eslint
+npm run build:extension   # bundle lib/ai + WebLLM into LectureNoteTaker/vendor/bevo-ai.js
 ```
 
-There is **no test suite and no test runner** in this repo. Verification is `npm run build` + manual exercise of the app. Don't invent a test command.
+**There is no test suite and no test runner.** Verification is `npm run build`, `npm run lint`, and manual exercise in a real browser. Don't invent a test command. Pure logic in `lib/ai/` (chunking, merge, rendering) is straightforward to exercise with a throwaway `npx tsx` script — that's how the VTT and merge bugs were found.
 
-Chrome extension: load `LectureNoteTaker/` unpacked at `chrome://extensions/` with Developer mode on. After editing extension files, hit refresh on the extension card *and* reload the lecture page (the content script only injects on fresh page load).
+Lint baseline is **13 errors / 5 warnings**, all pre-existing (unescaped entities, `setState` in effects, one `any`). Compare against that number rather than expecting zero.
 
-## Architecture notes that aren't obvious from the file tree
+**After changing anything under `lib/ai/`, run `npm run build:extension`** or the extension keeps running the previous bundle. `LectureNoteTaker/vendor/` is generated and gitignored, so a fresh clone must build it before the extension will load.
 
-**The browser never holds privileged credentials.** All Gemini, Supabase-admin, and Stripe calls go through `app/api/*` route handlers. The Chrome extension is just another client of those same routes — it authenticates by sending the web app's session cookie (`credentials: 'include'` in `LectureNoteTaker/auth.js`), so a user must log in on the web app first.
+## The constraint that shapes everything
 
-**Every mutating API route follows the same shape:**
-```ts
-const supabase = await createClient();            // lib/supabase/server.ts, cookie-based
-const { data: { user } } = await supabase.auth.getUser();
-if (!user) return 401;
-const check = await checkLimit(supabase, user.id, 'notes');   // lib/usage.ts
-if (!check.allowed) return 403 with limitErrorResponse(...);
-```
-Never bypass `checkLimit` when adding a route that creates a course, note, quiz, or material — it is the only enforcement point for the freemium model. Free tier is *lifetime* counts; Pro is unlimited except a monthly quiz cap.
+The generation model has a **4096-token context window holding prompt and completion together**. A 50,000-character lecture is roughly 12,500 tokens of transcript — about 5× over budget. This is why the pipeline looks the way it does, and any change that assumes a large context will break:
 
-**Gemini is called with raw `fetch` against the REST endpoint**, not an SDK, with the model URL hardcoded per-route. `gemini-2.0-flash` for generation-heavy work, `gemini-2.0-flash-lite` for grading/intent/notes. Key comes from `process.env.GEMINI_API_KEY` — the platform owns it; there is no user-supplied-key path (see Legacy below).
+| | tokens |
+|---|---|
+| System prompt | ~350 |
+| Output reserve | ~1000 |
+| Transcript per pass | ~2400 (≈9,500 chars) |
 
-**FastAPI is optional by design.** `lib/fastapi.ts` exposes `isFastapiAvailable()` (3s `/health` probe); routes that use RAG call it first and fall back to a direct Gemini call over raw text from Supabase. Any new FastAPI-backed feature must keep a working fallback, or the app breaks whenever Railway is down. Next.js ↔ FastAPI auth is a shared `SERVICE_SECRET` sent as the `x-service-secret` header; the Python side checks it per-router (`verify_internal`).
+Consequences worth internalizing before editing `lib/ai/`:
 
-**ChromaDB is embedded in the FastAPI process** on a persistent local dir (`CHROMA_PERSIST_DIR`) — it is not a separate service, and the data does not survive a container without a mounted volume. One collection per user+course, named `u{user_id[:16]}_c{course_id[:16]}` (dashes stripped) via `db/chroma.py:collection_name`.
+- **The merge step cannot be a model call.** Several chunks of output exceed the same window the chunking exists to avoid. `lib/ai/merge.ts` is pure data manipulation and must stay that way. The only reduce-step model call is the title, and it sees *headings only*.
+- **The model emits data, never markup.** Formulas come back as LaTeX strings; `lib/ai/render.ts` turns them into MathML via KaTeX. Never ask the model for HTML.
+- **Chunks are generated independently.** Cross-chunk drift is absorbed by dedupe in `merge.ts` (terms deduped by normalized form, first wins), not by threading shared context through passes.
+- **Structure is enforced, content is not.** WebLLM's constrained decoding against the schemas in `lib/ai/schema.ts` makes malformed JSON impossible. It guarantees a well-formed `definitions` array, never correct definitions.
 
-**Quiz generation is a LangGraph graph** in `python-service/agents/quiz_pipeline.py`: Orchestrator (rewrite query) → Retrieval (embed + Chroma query with unit/material filters) → Generator (Gemini → JSON array). Grading is a separate standalone `grade_answer()`, not part of the graph.
+## Capability gating and read-only mode
 
-**Database migrations are hand-run SQL.** `supabase-schema-v2.sql`, then `supabase-schema-v3.sql`, pasted into the Supabase SQL editor in order. There is no migration tool — a schema change means adding a new `supabase-schema-vN.sql` and telling the user to run it. RLS is on for every table.
+`lib/ai/capability.ts` runs before any download and returns one of three modes:
 
-**Stripe tier state lives in the `users` table** and is synced only by `/api/stripe/webhook`. Price ID → tier mapping is `STRIPE_PRO_PRICE_ID` → `'pro'`; anything else falls through. `lib/stripe.ts` lazily constructs the client (module-level construction would break builds without the env var) — use `getStripe()` inside handlers.
+| Mode | Model | Trigger |
+|---|---|---|
+| `full` | `Llama-3.2-1B-Instruct-q4f16_1-MLC` (879 MB) | adapter limits ≥ 879 MB |
+| `reduced` | `SmolLM2-360M-Instruct-q4f16_1-MLC` (376 MB) | limits ≥ 376 MB |
+| `readonly` | none | no `navigator.gpu`, null adapter, or insufficient limits |
 
-## Gotchas / current state
+Browser support is no longer the main constraint — **memory is**. Weights must fit in GPU-addressable memory, which on integrated graphics and Apple Silicon comes out of shared system RAM. A null adapter usually means a blocklisted driver, not a missing GPU.
 
-- **No root `middleware.ts` exists.** `lib/supabase/middleware.ts` exports `updateSession()` but nothing imports it, so Supabase sessions are not refreshed at the edge. If you touch auth, that's the missing wiring, not a bug in the helper.
-- `app/layout.tsx` still has the create-next-app default `metadata` title/description.
-- Theming is `lib/hooks/useTheme.ts` (localStorage key `bevo-theme`), applied per-component — there is no global theme provider or `dark:` class on `<html>`.
-- `LectureNoteTaker/config.js` has an `IS_PRODUCTION` boolean that must be flipped before shipping the extension; `PROD_URL` is still a placeholder Vercel URL.
-- `LectureNoteTaker/CLAUDE.md` and `LectureNoteTaker/README.md` are **stale**: they describe an OpenAI-powered, hardcoded-API-key, standalone extension. The extension now calls this repo's backend. Treat this file as authoritative and fix those when working in that directory.
+**Read-only is a first-class state, not an error.** Those users keep reading, organizing, searching, and exporting; only generation controls are hidden or disabled. Any new generation affordance must check `useAICapability()` and render `components/ReadOnlyNotice.tsx`. There is no server-side fallback to fall back to.
 
-### Legacy / dead code — don't build on it
-- `app/api/user/api-key/route.ts` returns HTTP 410 for all methods; the BYOK system was removed and the columns dropped in v3.
-- `lib/utils/encryption.ts` (and `ENCRYPTION_KEY`) is unreferenced — it existed to encrypt user Gemini keys.
-- `LectureNoteTaker/auth.js:checkApiKeyStatus()` still calls the retired `/api/user/api-key/status` endpoint.
-- `LectureNoteTaker.zip` (72 MB) is a committed build artifact.
+Note `Llama-3.2-1B` is *smaller* than `Qwen2.5-0.5B` (879 vs 945 MB) despite double the parameters — the 0.5B model's vocabulary embedding outweighs its parameter savings.
+
+## API routes are persistence-only
+
+Every route under `app/api/` validates auth and ownership, then reads or writes Supabase. **None of them perform inference.** The client generates, then POSTs the result.
+
+- `POST /api/notes/generate` saves a client-generated note. `GET /api/notes/generate?transcript_hash=` is a pre-flight cache check so a client never spends minutes regenerating an existing note. The server hashes the transcript itself rather than trusting a client-supplied hash; the client's `crypto.subtle` hash is verified to match Node's `createHash('sha256')`, including non-ASCII — dedupe fails silently if these diverge.
+- `POST /api/study/generate` saves client-generated questions.
+- `GET /api/notes?include_content=1` returns full `notes_html` instead of previews, for browser-side quiz generation. List views stay on previews.
+
+A consequence of this inversion: the server can no longer attest that a "note" was actually model-generated. That's accepted.
+
+## Extension architecture (MV3)
+
+Generation runs in an **offscreen document**, not the popup and not the service worker:
+
+- The popup closes on focus loss, which would kill a multi-minute run.
+- MV3 service workers can be terminated on the idle timer.
+
+`background.js` owns the offscreen document's lifecycle and mirrors progress into `chrome.storage.local` under `bevo_generation_state`, so reopening the popup reattaches to a run in flight rather than restarting it. Requires Chrome 124+ (WebGPU in extension contexts).
+
+`content.js` returns the **raw VTT**, not flattened text. The timestamps matter: `lib/ai/chunk.ts` splits at the longest silence in the tail of each buffer because professors pause at topic transitions. Fixed-width cuts land mid-derivation and produce two halves that each make no sense.
+
+MV3 forbids remote code, so WebLLM and `lib/ai/` are bundled locally by `scripts/build-extension.mjs`. The extension deliberately reuses the same modules as the web app rather than carrying a parallel implementation that would drift.
+
+## Local RAG
+
+`lib/ai/rag.ts` + `lib/ai/vectorstore.ts` index notes into IndexedDB and retrieve with brute-force cosine similarity. Uses `@langchain/core` and `@langchain/textsplitters`, but drives WebLLM **directly** rather than through `ChatWebLLM`, which has known breakage against recent web-llm releases ([langchainjs#5648](https://github.com/langchain-ai/langchainjs/issues/5648)) — this also avoids pulling in the very large `@langchain/community`.
+
+**The index is per-origin and per-device.** The extension (`chrome-extension://`) and the web app (`vercel.app`) have separate IndexedDB stores, so an index built while generating in the extension is invisible to the web app. Each origin rebuilds its own from server-stored notes via `ensureNotesIndexed`. The index is also lost if the user clears site data, and notes saved before `notes_json` existed can't be indexed at all — retrieval returning nothing is normal, and callers fall back to raw note text.
+
+Query and document vectors must both come from `snowflake-arctic-embed-s`. Mixing embedding models silently destroys retrieval quality rather than erroring.
+
+## Database
+
+Migrations are hand-run SQL, applied in order in the Supabase SQL editor: `supabase-schema-v2.sql` → `v3` → `v4`. There is no migration tool — a schema change means adding `supabase-schema-v5.sql` and telling the user to run it. RLS is on for every table.
+
+`notes.notes_json` holds the structured document; `notes_html` is the rendered form. Keep both — the JSON is what makes notes re-renderable and indexable.
+
+## Current state / gotchas
+
+- **No root `middleware.ts` exists.** `lib/supabase/middleware.ts` exports `updateSession()` but nothing imports it, so Supabase sessions aren't refreshed at the edge. If you touch auth, that's the missing wiring.
+- **PDF and image materials are unsupported.** `app/api/materials/[id]/process` handles `.txt`/`.md` only and returns 415 otherwise. Extraction used to rely on Gemini's vision API; the local model is text-only. Re-adding this needs pdf.js plus an OCR path, not a model call.
+- `LectureNoteTaker/config.js` has an `IS_PRODUCTION` flag that must be flipped before shipping, and `PROD_URL` is still a placeholder.
+- Theming is `lib/hooks/useTheme.ts` (localStorage `bevo-theme`), applied per-component — no global provider.
+- `LectureNoteTaker.zip` (72 MB) is a committed build artifact from an older version.
+- `MVP_DESIGN.md` is gitignored, so it isn't visible to anything reading the repo from git.
 
 ## Environment
 
-`.env.local` for Next.js, `python-service/.env` for FastAPI (see `.env.example`). Both need the same `GEMINI_API_KEY` and the same `SERVICE_SECRET`. Full variable tables are in `docs/architecture.md`.
+`.env.local` needs only Supabase values: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_APP_URL`.
+
+Retired and safe to delete if still present: `GEMINI_API_KEY`, `FASTAPI_URL`, `SERVICE_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRO_PRICE_ID`, `ENCRYPTION_KEY`.
