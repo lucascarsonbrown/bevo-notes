@@ -195,7 +195,7 @@
       }
 
       /* API Key Warning */
-      .api-key-warning {
+      .capability-warning, .api-key-warning {
         background: #fef2f2;
         border: 1px solid #fecaca;
         border-radius: 8px;
@@ -208,7 +208,7 @@
         display: block;
       }
 
-      body.dark-mode .api-key-warning {
+      body.dark-mode .capability-warning, .api-key-warning {
         background: #2d1a1a;
         border-color: #7f1d1d;
       }
@@ -510,9 +510,9 @@
     <!-- Main Section (shown when logged in) -->
     <div class="content main-section" id="main-section">
       <!-- API Key Warning -->
-      <div class="api-key-warning" id="api-key-warning">
-        <p class="api-key-warning-text">
-          No Gemini API key configured. Add one in settings to generate notes.
+      <div class="api-key-warning" id="capability-warning">
+        <p class="api-key-warning-text" id="capability-warning-text">
+          Checking whether this device can generate notes&hellip;
         </p>
         <button class="api-key-warning-btn" id="settings-btn">Open Settings</button>
       </div>

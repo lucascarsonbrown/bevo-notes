@@ -3,24 +3,12 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTheme } from '@/lib/hooks/useTheme';
+import { useAICapability } from '@/lib/ai/AICapabilityProvider';
 import { createClient } from '@/lib/supabase/client';
-import { SubscriptionTier } from '@/lib/usage';
 
 interface UserData {
   email: string;
-  tier: SubscriptionTier;
-  stripe_customer_id: string | null;
 }
-
-const TIER_LABELS: Record<SubscriptionTier, string> = {
-  free: 'Free',
-  pro: 'Pro',
-};
-
-const TIER_COLORS: Record<SubscriptionTier, string> = {
-  free: '#6b7280',
-  pro: '#bf5700',
-};
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -29,20 +17,14 @@ export default function SettingsPage() {
   const [userData, setUserData] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
   const { isDark, toggle: toggleTheme } = useTheme();
+  const { isReadOnly, preload, autoPreload, setAutoPreload, startPreload } = useAICapability();
 
   useEffect(() => {
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push('/login'); return; }
 
-      const res = await fetch('/api/usage');
-      const usage = res.ok ? await res.json() : null;
-
-      setUserData({
-        email: user.email ?? '',
-        tier: (usage?.tier as SubscriptionTier) ?? 'free',
-        stripe_customer_id: null,
-      });
+      setUserData({ email: user.email ?? '' });
       setLoading(false);
     };
     init();
@@ -51,10 +33,6 @@ export default function SettingsPage() {
   const handleLogout = async () => {
     await fetch('/api/auth/logout', { method: 'POST' });
     router.push('/login');
-  };
-
-  const handleUpgrade = () => {
-    router.push('/pricing');
   };
 
   if (loading) {
@@ -67,8 +45,6 @@ export default function SettingsPage() {
       </div>
     );
   }
-
-  const tier = userData?.tier ?? 'free';
 
   return (
     <div className={isDark ? 'dark' : ''}>
@@ -129,66 +105,6 @@ export default function SettingsPage() {
               </div>
             </section>
 
-            {/* Subscription */}
-            <section
-              className="rounded-xl border p-6 mb-6"
-              style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
-            >
-              <h2 className="text-xl font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
-                Subscription
-              </h2>
-
-              <div className="flex items-center gap-3 mb-4">
-                <span
-                  className="px-3 py-1 rounded-full text-sm font-semibold text-white"
-                  style={{ backgroundColor: TIER_COLORS[tier] }}
-                >
-                  {TIER_LABELS[tier]}
-                </span>
-                {tier === 'free' && (
-                  <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                    Free plan — limited usage
-                  </span>
-                )}
-                {tier === 'pro' && (
-                  <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                    Pro plan — active
-                  </span>
-                )}
-              </div>
-
-              {tier === 'free' && (
-                <div>
-                  <p className="text-sm mb-4" style={{ color: 'var(--text-secondary)' }}>
-                    Upgrade to get more notes, quizzes, and textbook uploads.
-                  </p>
-                  <button
-                    onClick={handleUpgrade}
-                    className="px-5 py-2 rounded-lg font-semibold text-white transition-all"
-                    style={{ backgroundColor: 'var(--accent-primary)' }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--accent-hover)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'var(--accent-primary)')}
-                  >
-                    View Plans →
-                  </button>
-                </div>
-              )}
-
-              {tier !== 'free' && (
-                <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                  To manage or cancel your subscription, visit the{' '}
-                  <button
-                    onClick={() => fetch('/api/stripe/portal', { method: 'POST' }).then(r => r.json()).then(d => d.url && window.open(d.url, '_blank'))}
-                    className="underline"
-                    style={{ color: 'var(--accent-primary)' }}
-                  >
-                    billing portal
-                  </button>
-                  .
-                </p>
-              )}
-            </section>
-
             {/* Preferences */}
             <section
               className="rounded-xl border p-6"
@@ -214,6 +130,44 @@ export default function SettingsPage() {
                   {isDark ? '☀️ Switch to Light' : '🌙 Switch to Dark'}
                 </button>
               </div>
+
+              {!isReadOnly && (
+                <div
+                  className="flex items-center justify-between mt-6 pt-6 border-t"
+                  style={{ borderColor: 'var(--border-color)' }}
+                >
+                  <div className="pr-4">
+                    <p className="font-medium" style={{ color: 'var(--text-primary)' }}>
+                      Preload the model
+                    </p>
+                    <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                      {preload.status === 'ready'
+                        ? 'Loaded and ready — generation will start immediately.'
+                        : 'Downloads the note-generation model (~880 MB, once) in the background so your first lecture doesn\u2019t wait on it. Skipped automatically on metered or very slow connections.'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {preload.status !== 'ready' && (
+                      <button
+                        onClick={startPreload}
+                        className="px-4 py-2 rounded-lg border font-medium transition-colors"
+                        style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                      >
+                        {preload.status === 'downloading'
+                          ? `${Math.round(preload.progress * 100)}%`
+                          : 'Download now'}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setAutoPreload(!autoPreload)}
+                      className="px-4 py-2 rounded-lg border font-medium transition-colors"
+                      style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                    >
+                      {autoPreload ? 'Automatic: On' : 'Automatic: Off'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </section>
           </div>
         </div>

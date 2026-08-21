@@ -1,27 +1,31 @@
-// popup.js - Bevo Notes Chrome extension popup
+// popup.js — Bevo Notes extension popup.
+//
+// The popup only drives the UI. Generation runs in the offscreen document, so
+// closing the popup mid-run does not cancel it; on reopen the popup reattaches
+// to whatever state the service worker mirrored into storage.
 
-// DOM elements
+const STATE_KEY = "bevo_generation_state";
+
 let generateBtn, statusEl, progressContainer, notesPreview, notesContent, viewFullBtn, themeToggle;
-let loginSection, mainSection, userBadge, userEmailEl, logoutBtn, loginBtn, apiKeyWarning, settingsBtn, dashboardLink;
+let loginSection, mainSection, userBadge, userEmailEl, logoutBtn, loginBtn, settingsBtn, dashboardLink;
+let capabilityWarning, capabilityWarningText;
+
+let canGenerate = false;
 
 function setProgress(step, message, isError = false) {
   progressContainer.classList.add("active");
   statusEl.textContent = message;
   statusEl.classList.toggle("error", isError);
 
-  // Update progress steps
   for (let i = 1; i <= 3; i++) {
     const stepEl = document.getElementById(`step-${i}`);
     stepEl.classList.remove("active", "complete");
-
     if (i < step) {
       stepEl.classList.add("complete");
     } else if (i === step) {
       stepEl.classList.add("active");
-      // Add spinner to active step
-      const icon = stepEl.querySelector(".step-icon");
       if (!isError) {
-        icon.innerHTML = '<div class="spinner"></div>';
+        stepEl.querySelector(".step-icon").innerHTML = '<div class="spinner"></div>';
       }
     }
   }
@@ -29,12 +33,9 @@ function setProgress(step, message, isError = false) {
 
 function resetProgress() {
   progressContainer.classList.remove("active");
-  const steps = document.querySelectorAll(".progress-step");
-  steps.forEach(step => {
+  document.querySelectorAll(".progress-step").forEach((step) => {
     step.classList.remove("active", "complete");
   });
-
-  // Reset icons
   document.querySelector("#step-1 .step-icon").textContent = "📄";
   document.querySelector("#step-2 .step-icon").textContent = "🔍";
   document.querySelector("#step-3 .step-icon").textContent = "✨";
@@ -49,7 +50,7 @@ function showLoggedInUI(email) {
   loginSection.style.display = "none";
   mainSection.classList.add("active");
   userBadge.style.display = "flex";
-  userEmailEl.textContent = email.split("@")[0]; // Show just the username part
+  userEmailEl.textContent = email.split("@")[0];
 }
 
 function showLoggedOutUI() {
@@ -58,26 +59,76 @@ function showLoggedOutUI() {
   userBadge.style.display = "none";
 }
 
-async function checkApiKeyAndUpdateUI() {
+/** Map a generation phase onto the three-step progress indicator. */
+function phaseToStep(phase) {
+  if (phase === "loading-model") return 1;
+  if (phase === "generating") return 2;
+  return 3;
+}
+
+function renderState(state) {
+  if (!state) return;
+
+  if (state.status === "running") {
+    generateBtn.disabled = true;
+    const pct = Math.round((state.progress ?? 0) * 100);
+    setProgress(phaseToStep(state.phase), `${state.message ?? "Working…"} (${pct}%)`);
+    return;
+  }
+
+  if (state.status === "done") {
+    document.querySelectorAll(".progress-step").forEach((step) => {
+      step.classList.add("complete");
+      step.classList.remove("active");
+    });
+    const suffix =
+      state.failedChunks > 0
+        ? ` (${state.failedChunks} of ${state.chunkCount} sections failed)`
+        : "";
+    statusEl.textContent = state.cached
+      ? "✓ Notes retrieved from your library"
+      : `✓ Notes generated on this device${suffix}`;
+    statusEl.classList.remove("error");
+    if (state.html) showNotes(state.html);
+    generateBtn.disabled = !canGenerate;
+    return;
+  }
+
+  if (state.status === "error") {
+    setProgress(0, state.message || "Generation failed", true);
+    generateBtn.disabled = !canGenerate;
+  }
+}
+
+async function checkCapability() {
   try {
-    const status = await window.BevoAuth.checkApiKeyStatus();
-    if (!status.has_key || !status.is_valid) {
-      apiKeyWarning.classList.add("active");
-      generateBtn.disabled = true;
-    } else {
-      apiKeyWarning.classList.remove("active");
+    const result = await chrome.runtime.sendMessage({ type: "CHECK_CAPABILITY" });
+    if (!result?.ok) throw new Error(result?.error || "Could not check this device");
+
+    canGenerate = result.mode !== "readonly";
+
+    if (canGenerate) {
+      capabilityWarning.classList.remove("active");
       generateBtn.disabled = false;
+      if (result.mode === "reduced") {
+        capabilityWarning.classList.add("active");
+        capabilityWarningText.textContent = result.explanation;
+      }
+    } else {
+      capabilityWarning.classList.add("active");
+      capabilityWarningText.textContent = result.explanation;
+      generateBtn.disabled = true;
     }
-  } catch {
-    // If we can't check, assume no key
-    apiKeyWarning.classList.add("active");
+  } catch (err) {
+    canGenerate = false;
+    capabilityWarning.classList.add("active");
+    capabilityWarningText.textContent =
+      "Could not check this device for note generation support. " + err.message;
     generateBtn.disabled = true;
   }
 }
 
-// Initialize everything when DOM is ready
 document.addEventListener("DOMContentLoaded", async () => {
-  // Get DOM elements
   generateBtn = document.getElementById("generate");
   statusEl = document.getElementById("status");
   progressContainer = document.getElementById("progress-container");
@@ -91,138 +142,113 @@ document.addEventListener("DOMContentLoaded", async () => {
   userEmailEl = document.getElementById("user-email");
   logoutBtn = document.getElementById("logout-btn");
   loginBtn = document.getElementById("login-btn");
-  apiKeyWarning = document.getElementById("api-key-warning");
   settingsBtn = document.getElementById("settings-btn");
   dashboardLink = document.getElementById("dashboard-link");
+  capabilityWarning = document.getElementById("capability-warning");
+  capabilityWarningText = document.getElementById("capability-warning-text");
 
-  // Set dashboard link
   dashboardLink.href = window.BevoAuth.BACKEND_URL + "/dashboard";
   dashboardLink.addEventListener("click", (e) => {
     e.preventDefault();
     chrome.tabs.create({ url: dashboardLink.href });
   });
 
-  // Dark mode toggle
   themeToggle.addEventListener("click", async () => {
     const isDark = document.body.classList.toggle("dark-mode");
     themeToggle.querySelector(".theme-icon").textContent = isDark ? "☀️" : "🌙";
     await chrome.storage.local.set({ darkMode: isDark });
   });
 
-  // View full notes button
   viewFullBtn.addEventListener("click", () => {
     chrome.tabs.create({ url: chrome.runtime.getURL("notes.html") });
   });
 
-  // Login button
-  loginBtn.addEventListener("click", () => {
-    window.BevoAuth.openLoginPage();
-  });
-
-  // Logout button
+  loginBtn.addEventListener("click", () => window.BevoAuth.openLoginPage());
   logoutBtn.addEventListener("click", async () => {
     await window.BevoAuth.clearSession();
     showLoggedOutUI();
   });
+  settingsBtn.addEventListener("click", () => window.BevoAuth.openSettingsPage());
 
-  // Settings button
-  settingsBtn.addEventListener("click", () => {
-    window.BevoAuth.openSettingsPage();
-  });
-
-  // Restore theme preference
   const { darkMode } = await chrome.storage.local.get(["darkMode"]);
   if (darkMode) {
     document.body.classList.add("dark-mode");
     themeToggle.querySelector(".theme-icon").textContent = "☀️";
   }
 
-  // Sync session from web app (in case user logged in via browser)
-  // This also checks if existing session is still valid
   const user = await window.BevoAuth.syncSession();
   if (user && user.email) {
     showLoggedInUI(user.email);
-    await checkApiKeyAndUpdateUI();
+    await checkCapability();
 
-    // Restore notes if available
+    // Reattach to a run that may have continued while the popup was closed.
+    const { [STATE_KEY]: state } = await chrome.storage.local.get(STATE_KEY);
+    if (state) renderState(state);
+
     const { latestNotesHtml } = await chrome.storage.local.get(["latestNotesHtml"]);
-    if (latestNotesHtml) {
-      showNotes(latestNotesHtml);
-    }
+    if (latestNotesHtml && !state?.html) showNotes(latestNotesHtml);
   } else {
     showLoggedOutUI();
   }
 
-  // Generate button click handler
+  // Live updates while the popup happens to be open.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes[STATE_KEY]) return;
+    const state = changes[STATE_KEY].newValue;
+    renderState(state);
+    if (state?.status === "done" && state.html) {
+      chrome.storage.local.set({ latestNotesHtml: state.html });
+    }
+  });
+
   generateBtn.addEventListener("click", async () => {
+    if (!canGenerate) return;
     generateBtn.disabled = true;
     resetProgress();
     notesPreview.classList.remove("active");
 
     try {
-      // Step 1: Fetch transcript
-      setProgress(1, "Getting transcript from lecture page...");
-
+      setProgress(1, "Getting transcript from lecture page…");
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
       let response;
       try {
         response = await chrome.tabs.sendMessage(tab.id, { type: "GET_TRANSCRIPT" });
       } catch (err) {
-        if (err.message.includes("Receiving end does not exist") || err.message.includes("Could not establish connection")) {
-          throw new Error("Please reload the lecture page and try again. (Extension needs fresh page load)");
+        if (
+          err.message.includes("Receiving end does not exist") ||
+          err.message.includes("Could not establish connection")
+        ) {
+          throw new Error(
+            "Please reload the lecture page and try again. (Extension needs a fresh page load)"
+          );
         }
         throw err;
       }
 
-      if (!response?.ok) {
-        throw new Error(response?.error || "Unknown error getting transcript");
-      }
+      if (!response?.ok) throw new Error(response?.error || "Could not read the transcript");
 
-      const transcript = response.transcript;
-
-      // Step 2: Analyzing
-      setProgress(2, "Analyzing lecture content...");
-      await new Promise(resolve => setTimeout(resolve, 500)); // Brief pause for UX
-
-      // Step 3: Generate with AI via backend
-      setProgress(3, "Generating structured notes with AI...");
-
-      const result = await window.BevoAuth.generateNotes(transcript);
-
-      // Complete all steps
-      document.querySelectorAll(".progress-step").forEach(step => {
-        step.classList.add("complete");
-        step.classList.remove("active");
+      const started = await chrome.runtime.sendMessage({
+        type: "START_GENERATION",
+        vtt: response.vtt,
+        transcript: response.transcript,
+        title: response.title,
+        lectureUrl: tab.url,
+        backendUrl: window.BevoAuth.BACKEND_URL,
       });
 
-      statusEl.textContent = result.cached
-        ? "✓ Notes retrieved from cache!"
-        : "✓ Notes generated successfully!";
-      statusEl.classList.remove("error");
+      if (!started?.ok) throw new Error(started?.error || "Could not start generation");
 
-      // Display notes
-      showNotes(result.notes_html);
-
-      // Store for notes.html viewer
-      await chrome.storage.local.set({ latestNotesHtml: result.notes_html });
-
-      generateBtn.disabled = false;
+      setProgress(1, "Preparing the model on your device…");
     } catch (err) {
       console.error(err);
-
-      // Check for specific error types
       if (err.message.includes("Session expired") || err.message.includes("Not logged in")) {
         showLoggedOutUI();
-        setProgress(0, "Please log in to generate notes", true);
-      } else if (err.message.includes("No API key")) {
-        apiKeyWarning.classList.add("active");
-        setProgress(0, "Please add your Gemini API key in settings", true);
+        setProgress(0, "Please log in to save notes", true);
       } else {
         setProgress(0, "Error: " + err.message, true);
       }
-
-      generateBtn.disabled = false;
+      generateBtn.disabled = !canGenerate;
     }
   });
 });

@@ -3,8 +3,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { useAICapability } from '@/lib/ai/AICapabilityProvider';
+import { generateQuiz } from '@/lib/ai/quiz';
+import { ensureNotesIndexed, type IndexableNote } from '@/lib/ai/rag';
+import ReadOnlyNotice from '@/components/ReadOnlyNotice';
 import DeleteConfirmationModal from '@/components/DeleteConfirmationModal';
-import SuggestUnitsModal from '@/components/SuggestUnitsModal';
 import { useTheme } from '@/lib/hooks/useTheme';
 
 interface Material {
@@ -396,7 +399,6 @@ export default function CoursePage() {
                 units={units}
                 courseColor={course.color}
                 onUploaded={fetchMaterials}
-                onUnitsCreated={fetchUnits}
                 isUploadModalOpen={isUploadModalOpen}
                 setIsUploadModalOpen={setIsUploadModalOpen}
               />
@@ -439,7 +441,6 @@ function MaterialsTab({
   units,
   courseColor,
   onUploaded,
-  onUnitsCreated,
   isUploadModalOpen,
   setIsUploadModalOpen,
 }: {
@@ -448,7 +449,6 @@ function MaterialsTab({
   units: Unit[];
   courseColor: string;
   onUploaded: () => void;
-  onUnitsCreated: () => void;
   isUploadModalOpen: boolean;
   setIsUploadModalOpen: (v: boolean) => void;
 }) {
@@ -460,7 +460,6 @@ function MaterialsTab({
   const [unitId, setUnitId] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [suggestMaterialId, setSuggestMaterialId] = useState<string | null>(null);
 
   const typeLabels: Record<string, string> = {
     syllabus: '📋 Syllabus',
@@ -527,11 +526,6 @@ function MaterialsTab({
       setFile(null);
       setIsUploadModalOpen(false);
       onUploaded();
-
-      // Offer AI unit suggestions after syllabus upload (only if no units exist yet)
-      if (type === 'syllabus' && units.length === 0) {
-        setSuggestMaterialId(saved.id);
-      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
@@ -565,16 +559,6 @@ function MaterialsTab({
 
   return (
     <div>
-      {suggestMaterialId && (
-        <SuggestUnitsModal
-          courseId={courseId}
-          materialId={suggestMaterialId}
-          courseColor={courseColor}
-          onClose={() => setSuggestMaterialId(null)}
-          onUnitsCreated={() => { setSuggestMaterialId(null); onUnitsCreated(); }}
-        />
-      )}
-
       <div className="flex items-center justify-between mb-6">
         <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
           Syllabi, textbooks, and handouts for this course.
@@ -604,7 +588,7 @@ function MaterialsTab({
             <label className="block text-xs mb-1.5 font-medium" style={{ color: 'var(--text-secondary)' }}>File (PDF, DOCX, TXT)</label>
             <input
               type="file"
-              accept=".pdf,.docx,.doc,.txt,.md"
+              accept=".txt,.md"
               onChange={handleFileChange}
               required
               className="w-full text-sm rounded-lg border px-3 py-2 transition-colors"
@@ -962,6 +946,8 @@ function StudyTab({
   const [count, setCount] = useState(10);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
+  const [genStatus, setGenStatus] = useState<string>('');
+  const { capability, isReadOnly, explanation } = useAICapability();
 
   const fetchTools = async () => {
     try {
@@ -1006,23 +992,79 @@ function StudyTab({
 
   const nothingSelected = selectedUnitIds.length === 0 && selectedMaterialIds.length === 0;
 
+  /** Gather raw text plus the notes themselves, so they can also be indexed locally. */
+  const collectSource = async (): Promise<{ text: string; notes: IndexableNote[] }> => {
+    const parts: string[] = [];
+    const collected: IndexableNote[] = [];
+
+    if (selectedUnitIds.length) {
+      const res = await fetch(`/api/notes?course_id=${courseId}&include_content=1&limit=200`);
+      if (res.ok) {
+        const data = await res.json();
+        const selected = (data.notes || []).filter(
+          (n: { unit_id: string | null }) => n.unit_id && selectedUnitIds.includes(n.unit_id)
+        );
+        for (const note of selected) {
+          collected.push({ id: note.id, unit_id: note.unit_id, notes_json: note.notes_json ?? null });
+          const text = (note.notes_html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+          if (text) parts.push(`=== ${note.title} ===\n${text}`);
+        }
+      }
+    }
+
+    for (const materialId of selectedMaterialIds) {
+      const res = await fetch(`/api/materials/${materialId}`);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const material = data.material ?? data;
+      if (material?.content_text) parts.push(`=== ${material.title} ===\n${material.content_text}`);
+    }
+
+    return { text: parts.join('\n\n'), notes: collected };
+  };
+
+  // Generation runs on this device; the API call afterwards only persists the result.
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (nothingSelected) { setGenError('Select at least one unit or material.'); return; }
+    if (!capability || capability.mode === 'readonly') { setGenError(explanation); return; }
     setGenerating(true);
     setGenError(null);
+    setGenStatus('Gathering your notes…');
     try {
+      const { text: fallbackText, notes: sourceNotes } = await collectSource();
+
+      // Build the local index for anything not yet embedded on this origin.
+      if (capability.embeddingModel) {
+        await ensureNotesIndexed(courseId, sourceNotes, (done, total) =>
+          setGenStatus(`Indexing notes — ${done} of ${total}`)
+        ).catch(() => undefined);
+      }
+
+      const { questions } = await generateQuiz({
+        capability,
+        format,
+        count,
+        courseId,
+        unitIds: selectedUnitIds,
+        query,
+        fallbackText,
+        onProgress: setGenStatus,
+      });
+
+      setGenStatus('Saving…');
       const res = await fetch('/api/study/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ course_id: courseId, unit_ids: selectedUnitIds, material_ids: selectedMaterialIds, format, count, query }),
+        body: JSON.stringify({ course_id: courseId, unit_ids: selectedUnitIds, format, query, questions }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Generation failed');
+      if (!res.ok) throw new Error(data.error || 'Failed to save');
       router.push(`/courses/${courseId}/study/${data.id}`);
     } catch (err: unknown) {
       setGenError(err instanceof Error ? err.message : 'Something went wrong');
       setGenerating(false);
+      setGenStatus('');
     }
   };
 
@@ -1036,8 +1078,10 @@ function StudyTab({
       <div className="rounded-xl border p-6 space-y-5" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
         <div>
           <h2 className="font-semibold text-base mb-0.5" style={{ color: 'var(--text-primary)' }}>Generate a study tool</h2>
-          <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>AI builds it from your notes and materials</p>
+          <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Built on your device from your notes and materials</p>
         </div>
+
+        <ReadOnlyNotice />
 
         <form onSubmit={handleGenerate} className="space-y-4">
           {/* Natural language prompt */}
@@ -1158,11 +1202,12 @@ function StudyTab({
 
           <button
             type="submit"
-            disabled={generating || nothingSelected}
+            disabled={generating || nothingSelected || isReadOnly}
+            title={isReadOnly ? explanation : undefined}
             className="px-5 py-2.5 rounded-lg text-sm font-medium text-white transition-all disabled:opacity-50"
             style={{ backgroundColor: courseColor }}
           >
-            {generating ? 'Generating…' : `Generate ${formatLabel[format]}`}
+            {generating ? (genStatus || 'Generating…') : `Generate ${formatLabel[format]}`}
           </button>
         </form>
       </div>

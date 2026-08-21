@@ -68,61 +68,6 @@ function openSettingsPage() {
 }
 
 /**
- * Generate notes via backend API
- * @param {string} transcript - The lecture transcript
- * @param {string} title - Optional title for the notes
- * @returns {Promise<{id: string, title: string, notes_html: string}>}
- */
-async function generateNotes(transcript, title = null) {
-  const session = await getSession();
-
-  if (!session) {
-    throw new Error('Not logged in');
-  }
-
-  const response = await fetch(`${BACKEND_URL}/api/notes/generate`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'include', // Include cookies for session
-    body: JSON.stringify({
-      transcript,
-      title,
-    }),
-  });
-
-  if (response.status === 401) {
-    // Session expired, clear and prompt re-login
-    await clearSession();
-    throw new Error('Session expired. Please log in again.');
-  }
-
-  if (!response.ok) {
-    const data = await response.json();
-    throw new Error(data.error || 'Failed to generate notes');
-  }
-
-  return response.json();
-}
-
-/**
- * Check API key status
- * @returns {Promise<{has_key: boolean, is_valid: boolean}>}
- */
-async function checkApiKeyStatus() {
-  const response = await fetch(`${BACKEND_URL}/api/user/api-key/status`, {
-    credentials: 'include',
-  });
-
-  if (!response.ok) {
-    return { has_key: false, is_valid: false };
-  }
-
-  return response.json();
-}
-
-/**
  * Sync session from web app cookies
  * Call this on popup open to detect if user logged in via web
  * @returns {Promise<{email: string} | null>}
@@ -158,8 +103,6 @@ window.BevoAuth = {
   clearSession,
   openLoginPage,
   openSettingsPage,
-  generateNotes,
-  checkApiKeyStatus,
   syncSession,
   BACKEND_URL,
 };
