@@ -1,6 +1,5 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
-import { checkLimit, limitErrorResponse } from '@/lib/usage';
 
 export async function GET() {
   const supabase = await createClient();
@@ -48,14 +47,6 @@ export async function POST(request: Request) {
 
   if (!course_code?.trim() || !course_name?.trim()) {
     return NextResponse.json({ error: 'course_code and course_name are required' }, { status: 400 });
-  }
-
-  const limitCheck = await checkLimit(supabase, user.id, 'courses');
-  if (!limitCheck.allowed) {
-    return NextResponse.json(
-      { error: limitErrorResponse('courses', limitCheck.current, limitCheck.limit) },
-      { status: 403 }
-    );
   }
 
   const { data: course, error } = await supabase

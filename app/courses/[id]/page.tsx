@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import DeleteConfirmationModal from '@/components/DeleteConfirmationModal';
-import SuggestUnitsModal from '@/components/SuggestUnitsModal';
 import { useTheme } from '@/lib/hooks/useTheme';
 
 interface Material {
@@ -396,7 +395,6 @@ export default function CoursePage() {
                 units={units}
                 courseColor={course.color}
                 onUploaded={fetchMaterials}
-                onUnitsCreated={fetchUnits}
                 isUploadModalOpen={isUploadModalOpen}
                 setIsUploadModalOpen={setIsUploadModalOpen}
               />
@@ -439,7 +437,6 @@ function MaterialsTab({
   units,
   courseColor,
   onUploaded,
-  onUnitsCreated,
   isUploadModalOpen,
   setIsUploadModalOpen,
 }: {
@@ -448,7 +445,6 @@ function MaterialsTab({
   units: Unit[];
   courseColor: string;
   onUploaded: () => void;
-  onUnitsCreated: () => void;
   isUploadModalOpen: boolean;
   setIsUploadModalOpen: (v: boolean) => void;
 }) {
@@ -460,7 +456,6 @@ function MaterialsTab({
   const [unitId, setUnitId] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [suggestMaterialId, setSuggestMaterialId] = useState<string | null>(null);
 
   const typeLabels: Record<string, string> = {
     syllabus: '📋 Syllabus',
@@ -527,11 +522,6 @@ function MaterialsTab({
       setFile(null);
       setIsUploadModalOpen(false);
       onUploaded();
-
-      // Offer AI unit suggestions after syllabus upload (only if no units exist yet)
-      if (type === 'syllabus' && units.length === 0) {
-        setSuggestMaterialId(saved.id);
-      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
@@ -565,16 +555,6 @@ function MaterialsTab({
 
   return (
     <div>
-      {suggestMaterialId && (
-        <SuggestUnitsModal
-          courseId={courseId}
-          materialId={suggestMaterialId}
-          courseColor={courseColor}
-          onClose={() => setSuggestMaterialId(null)}
-          onUnitsCreated={() => { setSuggestMaterialId(null); onUnitsCreated(); }}
-        />
-      )}
-
       <div className="flex items-center justify-between mb-6">
         <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
           Syllabi, textbooks, and handouts for this course.
@@ -604,7 +584,7 @@ function MaterialsTab({
             <label className="block text-xs mb-1.5 font-medium" style={{ color: 'var(--text-secondary)' }}>File (PDF, DOCX, TXT)</label>
             <input
               type="file"
-              accept=".pdf,.docx,.doc,.txt,.md"
+              accept=".txt,.md"
               onChange={handleFileChange}
               required
               className="w-full text-sm rounded-lg border px-3 py-2 transition-colors"

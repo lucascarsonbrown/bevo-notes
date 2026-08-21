@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import TopNav from '@/components/TopNav';
-import UsageBanner from '@/components/UsageBanner';
 import CreateCourseModal from '@/components/CreateCourseModal';
 import DeleteConfirmationModal from '@/components/DeleteConfirmationModal';
 import { useTheme } from '@/lib/hooks/useTheme';
@@ -137,8 +136,6 @@ export default function DashboardPage() {
         />
 
         <div className="pt-16">
-          <UsageBanner />
-
           <main className="max-w-6xl mx-auto px-6 py-8">
             {/* Header */}
             <div className="flex items-center justify-between mb-8">

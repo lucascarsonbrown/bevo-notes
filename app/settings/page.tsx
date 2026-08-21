@@ -4,23 +4,10 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTheme } from '@/lib/hooks/useTheme';
 import { createClient } from '@/lib/supabase/client';
-import { SubscriptionTier } from '@/lib/usage';
 
 interface UserData {
   email: string;
-  tier: SubscriptionTier;
-  stripe_customer_id: string | null;
 }
-
-const TIER_LABELS: Record<SubscriptionTier, string> = {
-  free: 'Free',
-  pro: 'Pro',
-};
-
-const TIER_COLORS: Record<SubscriptionTier, string> = {
-  free: '#6b7280',
-  pro: '#bf5700',
-};
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -35,14 +22,7 @@ export default function SettingsPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push('/login'); return; }
 
-      const res = await fetch('/api/usage');
-      const usage = res.ok ? await res.json() : null;
-
-      setUserData({
-        email: user.email ?? '',
-        tier: (usage?.tier as SubscriptionTier) ?? 'free',
-        stripe_customer_id: null,
-      });
+      setUserData({ email: user.email ?? '' });
       setLoading(false);
     };
     init();
@@ -51,10 +31,6 @@ export default function SettingsPage() {
   const handleLogout = async () => {
     await fetch('/api/auth/logout', { method: 'POST' });
     router.push('/login');
-  };
-
-  const handleUpgrade = () => {
-    router.push('/pricing');
   };
 
   if (loading) {
@@ -67,8 +43,6 @@ export default function SettingsPage() {
       </div>
     );
   }
-
-  const tier = userData?.tier ?? 'free';
 
   return (
     <div className={isDark ? 'dark' : ''}>
@@ -127,66 +101,6 @@ export default function SettingsPage() {
                   Sign Out
                 </button>
               </div>
-            </section>
-
-            {/* Subscription */}
-            <section
-              className="rounded-xl border p-6 mb-6"
-              style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
-            >
-              <h2 className="text-xl font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
-                Subscription
-              </h2>
-
-              <div className="flex items-center gap-3 mb-4">
-                <span
-                  className="px-3 py-1 rounded-full text-sm font-semibold text-white"
-                  style={{ backgroundColor: TIER_COLORS[tier] }}
-                >
-                  {TIER_LABELS[tier]}
-                </span>
-                {tier === 'free' && (
-                  <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                    Free plan — limited usage
-                  </span>
-                )}
-                {tier === 'pro' && (
-                  <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                    Pro plan — active
-                  </span>
-                )}
-              </div>
-
-              {tier === 'free' && (
-                <div>
-                  <p className="text-sm mb-4" style={{ color: 'var(--text-secondary)' }}>
-                    Upgrade to get more notes, quizzes, and textbook uploads.
-                  </p>
-                  <button
-                    onClick={handleUpgrade}
-                    className="px-5 py-2 rounded-lg font-semibold text-white transition-all"
-                    style={{ backgroundColor: 'var(--accent-primary)' }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--accent-hover)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'var(--accent-primary)')}
-                  >
-                    View Plans →
-                  </button>
-                </div>
-              )}
-
-              {tier !== 'free' && (
-                <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                  To manage or cancel your subscription, visit the{' '}
-                  <button
-                    onClick={() => fetch('/api/stripe/portal', { method: 'POST' }).then(r => r.json()).then(d => d.url && window.open(d.url, '_blank'))}
-                    className="underline"
-                    style={{ color: 'var(--accent-primary)' }}
-                  >
-                    billing portal
-                  </button>
-                  .
-                </p>
-              )}
             </section>
 
             {/* Preferences */}

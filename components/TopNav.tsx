@@ -151,20 +151,6 @@ export default function TopNav({ searchQuery, onSearchChange, isDark, onThemeTog
                     <span>⚙️</span>
                     <span>Settings</span>
                   </button>
-
-                  <button
-                    onClick={() => {
-                      router.push('/pricing');
-                      setShowProfileMenu(false);
-                    }}
-                    className="w-full px-4 py-2.5 text-left text-sm flex items-center gap-2 transition-colors"
-                    style={{ color: 'var(--text-primary)' }}
-                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-secondary)'}
-                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                  >
-                    <span>⭐</span>
-                    <span>Upgrade Plan</span>
-                  </button>
                 </div>
 
                 <div className="h-px" style={{ backgroundColor: 'var(--border-color)' }}></div>
