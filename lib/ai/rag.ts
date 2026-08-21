@@ -1,6 +1,12 @@
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { WebLLMEmbeddings } from './embeddings';
-import { putRecords, search, type SearchFilters, type VectorRecord } from './vectorstore';
+import {
+  putRecords,
+  search,
+  indexedNoteIds,
+  type SearchFilters,
+  type VectorRecord,
+} from './vectorstore';
 import { sectionToPlainText } from './render';
 import type { NotesDocument } from './types';
 import type { ProgressHandler } from './engine';
@@ -62,6 +68,51 @@ export async function indexNote(
 
   await putRecords(records);
   return records.length;
+}
+
+export interface IndexableNote {
+  id: string;
+  unit_id: string | null;
+  notes_json: NotesDocument | null;
+}
+
+/**
+ * Index any notes not already present locally.
+ *
+ * The extension and the web app are separate origins with separate IndexedDB
+ * stores, so an index built while generating in the extension is invisible here.
+ * Each origin therefore rebuilds its own index from the notes the server holds.
+ * Notes saved before notes_json existed have nothing to index and are skipped —
+ * generation falls back to raw note text for those.
+ */
+export async function ensureNotesIndexed(
+  courseId: string,
+  notes: IndexableNote[],
+  onProgress?: (done: number, total: number) => void
+): Promise<number> {
+  const indexable = notes.filter((n) => n.notes_json?.sections?.length);
+  if (!indexable.length) return 0;
+
+  const alreadyIndexed = new Set(await indexedNoteIds(courseId));
+  const pending = indexable.filter((n) => !alreadyIndexed.has(n.id));
+  if (!pending.length) return 0;
+
+  let done = 0;
+  for (const note of pending) {
+    try {
+      await indexNote({
+        courseId,
+        noteId: note.id,
+        unitId: note.unit_id,
+        document: note.notes_json as NotesDocument,
+      });
+    } catch {
+      // Indexing is an optimization; retrieval falls back to raw text.
+    }
+    done++;
+    onProgress?.(done, pending.length);
+  }
+  return done;
 }
 
 export interface RetrievedContext {

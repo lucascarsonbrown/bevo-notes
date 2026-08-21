@@ -17,6 +17,9 @@ export async function GET(request: Request) {
   const courseId = searchParams.get('course_id');
   const unitId = searchParams.get('unit_id');
   const search = searchParams.get('search');
+  // Opt-in: study-tool generation runs in the browser and needs the full note
+  // text, not a preview. Off by default so list views stay cheap.
+  const includeContent = searchParams.get('include_content') === '1';
   const limit = parseInt(searchParams.get('limit') || '50', 10);
   const offset = parseInt(searchParams.get('offset') || '0', 10);
 
@@ -73,6 +76,7 @@ export async function GET(request: Request) {
     title: note.title,
     lecture_date: note.lecture_date,
     preview: note.notes_html ? note.notes_html.replace(/<[^>]*>/g, '').slice(0, 200) : '',
+    ...(includeContent ? { notes_html: note.notes_html } : {}),
     created_at: note.created_at,
     updated_at: note.updated_at,
     folder_id: note.folder_id,

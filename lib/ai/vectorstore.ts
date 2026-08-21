@@ -135,6 +135,12 @@ export async function deleteByNote(noteId: string): Promise<void> {
   db.close();
 }
 
+/** Ids of notes that already have vectors for this course. */
+export async function indexedNoteIds(courseId: string): Promise<string[]> {
+  const records = await recordsForCourse(courseId);
+  return Array.from(new Set(records.map((r) => r.noteId).filter((id): id is string => !!id)));
+}
+
 export async function countForCourse(courseId: string): Promise<number> {
   return (await recordsForCourse(courseId)).length;
 }

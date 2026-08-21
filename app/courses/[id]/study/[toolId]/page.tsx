@@ -3,6 +3,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { useAICapability } from '@/lib/ai/AICapabilityProvider';
+import { gradeAnswer } from '@/lib/ai/quiz';
+import ReadOnlyNotice from '@/components/ReadOnlyNotice';
 
 interface Flashcard { front: string; back: string; }
 interface MCQQuestion { question: string; choices: string[]; answer: string; explanation: string; }
@@ -24,6 +27,7 @@ export default function StudyToolPage() {
   const { id: courseId, toolId } = useParams<{ id: string; toolId: string }>();
   const router = useRouter();
   const supabase = createClient();
+  const { capability, isReadOnly, explanation } = useAICapability();
 
   const [tool, setTool] = useState<StudyTool | null>(null);
   const [loading, setLoading] = useState(true);
@@ -94,19 +98,19 @@ export default function StudyToolPage() {
     }
   };
 
+  // Grading runs on this device — the model is already loaded for generation.
   const handleGrade = async () => {
-    if (!frAnswer.trim() || !current) return;
+    if (!frAnswer.trim() || !current || !capability) return;
     const q = current as FRQuestion;
     setGrading(true);
     try {
-      const res = await fetch('/api/study/grade', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: q.question, model_answer: q.model_answer, student_answer: frAnswer }),
+      const result = await gradeAnswer({
+        capability,
+        question: q.question,
+        modelAnswer: q.model_answer,
+        studentAnswer: frAnswer,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setGradeResult(data);
+      setGradeResult(result);
     } catch (err) {
       setGradeResult({ score: 0, feedback: err instanceof Error ? err.message : 'Grading failed' });
     } finally {
@@ -258,10 +262,11 @@ export default function StudyToolPage() {
                   style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                 />
                 {!gradeResult && (
-                  <div className="flex gap-2 mt-3">
+                  <div className="flex gap-2 mt-3 items-center flex-wrap">
                     <button
                       onClick={handleGrade}
-                      disabled={grading || !frAnswer.trim()}
+                      disabled={grading || !frAnswer.trim() || isReadOnly}
+                      title={isReadOnly ? explanation : undefined}
                       className="px-5 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50 transition-all"
                       style={{ backgroundColor: courseColor }}
                     >
@@ -274,6 +279,7 @@ export default function StudyToolPage() {
                     >
                       {showModelAnswer ? 'Hide answer' : 'Show answer'}
                     </button>
+                    <ReadOnlyNotice compact />
                   </div>
                 )}
 
