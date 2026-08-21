@@ -9,12 +9,15 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@langchain/core": "^1.2.9",
+    "@langchain/textsplitters": "^1.0.1",
+    "@mlc-ai/web-llm": "^0.2.84",
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.89.0",
+    "katex": "^0.18.4",
     "next": "16.1.0",
     "react": "19.2.3",
-    "react-dom": "19.2.3",
-    "stripe": "^22.2.0"
+    "react-dom": "19.2.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
