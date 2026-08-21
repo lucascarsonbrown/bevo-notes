@@ -59,6 +59,8 @@ Consequences worth internalizing before editing `lib/ai/`:
 
 Browser support is no longer the main constraint — **memory is**. Weights must fit in GPU-addressable memory, which on integrated graphics and Apple Silicon comes out of shared system RAM. A null adapter usually means a blocklisted driver, not a missing GPU.
 
+`lib/ai/prewarm.ts` warms the generation model in the background once the user lands on an app route (`/dashboard`, `/courses`, `/notes`, `/settings` — never the landing or login page, so a bouncing visitor never pays for weights). It goes through the same `getEngine` singleton generation uses, so a warmed engine is picked up automatically with no call-site changes. It skips on `saveData` or a 2g connection unless the weights are already in Cache Storage, and honours the `bevo-preload` localStorage opt-out. `hasModelInCache` distinguishes a fresh ~880 MB download (shown in `components/ModelPreloadIndicator.tsx`) from a cache hit (silent).
+
 **Read-only is a first-class state, not an error.** Those users keep reading, organizing, searching, and exporting; only generation controls are hidden or disabled. Any new generation affordance must check `useAICapability()` and render `components/ReadOnlyNotice.tsx`. There is no server-side fallback to fall back to.
 
 Note `Llama-3.2-1B` is *smaller* than `Qwen2.5-0.5B` (879 vs 945 MB) despite double the parameters — the 0.5B model's vocabulary embedding outweighs its parameter savings.

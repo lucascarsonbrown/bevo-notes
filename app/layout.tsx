@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import "katex/dist/katex.min.css";
 import { AICapabilityProvider } from "@/lib/ai/AICapabilityProvider";
+import ModelPreloadIndicator from "@/components/ModelPreloadIndicator";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -29,7 +30,10 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <AICapabilityProvider>{children}</AICapabilityProvider>
+        <AICapabilityProvider>
+          {children}
+          <ModelPreloadIndicator />
+        </AICapabilityProvider>
       </body>
     </html>
   );

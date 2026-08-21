@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTheme } from '@/lib/hooks/useTheme';
+import { useAICapability } from '@/lib/ai/AICapabilityProvider';
 import { createClient } from '@/lib/supabase/client';
 
 interface UserData {
@@ -16,6 +17,7 @@ export default function SettingsPage() {
   const [userData, setUserData] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
   const { isDark, toggle: toggleTheme } = useTheme();
+  const { isReadOnly, preload, autoPreload, setAutoPreload, startPreload } = useAICapability();
 
   useEffect(() => {
     const init = async () => {
@@ -128,6 +130,44 @@ export default function SettingsPage() {
                   {isDark ? '☀️ Switch to Light' : '🌙 Switch to Dark'}
                 </button>
               </div>
+
+              {!isReadOnly && (
+                <div
+                  className="flex items-center justify-between mt-6 pt-6 border-t"
+                  style={{ borderColor: 'var(--border-color)' }}
+                >
+                  <div className="pr-4">
+                    <p className="font-medium" style={{ color: 'var(--text-primary)' }}>
+                      Preload the model
+                    </p>
+                    <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                      {preload.status === 'ready'
+                        ? 'Loaded and ready — generation will start immediately.'
+                        : 'Downloads the note-generation model (~880 MB, once) in the background so your first lecture doesn\u2019t wait on it. Skipped automatically on metered or very slow connections.'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {preload.status !== 'ready' && (
+                      <button
+                        onClick={startPreload}
+                        className="px-4 py-2 rounded-lg border font-medium transition-colors"
+                        style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                      >
+                        {preload.status === 'downloading'
+                          ? `${Math.round(preload.progress * 100)}%`
+                          : 'Download now'}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setAutoPreload(!autoPreload)}
+                      className="px-4 py-2 rounded-lg border font-medium transition-colors"
+                      style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                    >
+                      {autoPreload ? 'Automatic: On' : 'Automatic: Off'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </section>
           </div>
         </div>
