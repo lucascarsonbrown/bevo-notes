@@ -13,6 +13,12 @@ off UT's lecture-capture player, generates notes locally through WebLLM on the
 student's GPU, and syncs the finished notes to a dashboard for organizing,
 searching, and exporting.
 
+![The generation pipeline, the context budget, and why chunking is structural](docs/figure.png)
+
+*The right-hand panels are arithmetic on the documented context budget; the
+left is a diagram of `lib/ai/`, not a measurement. Regenerate with
+`python3 docs/render_figure.py`.*
+
 ## Why in the browser
 
 The obvious build is "POST the transcript to an API, get notes back." That
@@ -20,8 +26,9 @@ design has three problems for a student tool: someone pays per token for every
 lecture in the university, the lecture content leaves the student's machine,
 and the whole thing dies the moment the free credits run out.
 
-Running a 1.1 GB quantized Llama 3.2 1B in the browser via WebGPU trades those
-away for a one-time download, cached thereafter. The cost of the trade is a
+Running a quantized Llama 3.2 1B (879 MB) in the browser via WebGPU trades
+those away for a one-time download, cached thereafter — about 1.1 GB in total
+once the embedding model is included. The cost of the trade is a
 **4096-token context window holding prompt and completion together**, which is
 the constraint the rest of the architecture is shaped around.
 
@@ -90,7 +97,7 @@ never sees a model.
 | Layer | Choice |
 |---|---|
 | Framework | Next.js 16 (App Router), React 19, TypeScript |
-| Inference | `@mlc-ai/web-llm` — Llama 3.2 1B Instruct, q4f16 |
+| Inference | `@mlc-ai/web-llm` — Llama 3.2 1B Instruct q4f16, SmolLM2 360M on reduced tier |
 | Embeddings | `snowflake-arctic-embed-s`, in-browser |
 | Chunking | `@langchain/textsplitters` |
 | Data | Supabase — Postgres with row-level security, Auth, Storage |
@@ -100,10 +107,22 @@ never sees a model.
 
 ## Capability tiers
 
-Not every machine can run a 1.1 GB model. `lib/ai/capability.ts` probes for
-WebGPU support and available memory, then routes the user to a `full` tier
-(local generation) or a reduced tier, rather than failing at the first model
-call.
+Not every machine can hold the weights. `lib/ai/capability.ts` runs before any
+download and returns one of three modes:
+
+| Mode | Model | Trigger |
+|---|---|---|
+| `full` | Llama-3.2-1B-Instruct, q4f16 (879 MB) | adapter limits ≥ 879 MB |
+| `reduced` | SmolLM2-360M-Instruct, q4f16 (376 MB) | adapter limits ≥ 376 MB |
+| `readonly` | none | no WebGPU, null adapter, or insufficient limits |
+
+The binding constraint is memory rather than browser support: weights have to
+fit in GPU-addressable memory, which on integrated graphics and Apple Silicon
+comes out of shared system RAM.
+
+Read-only is a first-class state, not an error. Those users still read,
+organize, search, and export — only the generation controls are hidden. There
+is no server-side fallback to fall back to, by design.
 
 ## Running it
 
